@@ -81,55 +81,71 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
   });
 
   return (
-    <box width="100%" alignItems="center">
-      <box
-        // TODO: add left border
-        border={["left"]}
-        borderColor="cyan"
-      >
+    <box flexDirection="column" gap={2}>
+      {/* command menu dropdown — floating panel above the input */}
+      {cmd.isOpen && (
         <box
-          position="relative"
-          justifyContent="center"
-          paddingX={2}
-          paddingY={1}
-          backgroundColor="#1A1A24"
-          width="100%"
-          gap={1}
+          border={true}
+          borderStyle="rounded"
+          borderColor="#89B4FA"
+          backgroundColor="#13131A"
+          padding={1}
           flexDirection="column"
         >
-          {/* command menu dropdown — shown when typing / */}
-          {cmd.isOpen && (
-            <box flexDirection="column" marginBottom={1}>
-              <CommandMenu
-                query={cmd.query}
-                selectedIndex={cmd.selectedIndex}
-                scrollRef={scrollRef}
-                onSelect={(index) => cmd.selectAt(index)}
-                onExecute={(index) => cmd.selectAt(index)}
-              />
-              {(() => {
-                const command = cmd.filtered[cmd.selectedIndex];
-                return command ? (
-                  <box paddingX={1} paddingTop={1}>
-                    <text attributes={TextAttributes.ITALIC | TextAttributes.DIM}>
-                      {command.description}
-                    </text>
-                  </box>
-                ) : null;
-              })()}
-            </box>
-          )}
+          {/* header */}
+          <box paddingX={1} paddingBottom={1}>
+            <text attributes={TextAttributes.BOLD} fg="#89B4FA">
+              Commands
+            </text>
+            <text attributes={TextAttributes.DIM} fg="#6B6B7B">
+              {" "}· {"type to filter"}
+            </text>
+          </box>
 
-          <textarea
-            ref={textareaRef}
-            focused={!disabled}
-            keyBindings={TEXTAREA_KEY_BINDINGS}
-            placeholder={`Ask anything... " Fix a bug in the database" `}
-            onContentChange={handleContentChange}
+          <CommandMenu
+            query={cmd.query}
+            selectedIndex={cmd.selectedIndex}
+            scrollRef={scrollRef}
+            onSelect={(index) => cmd.selectAt(index)}
+            onExecute={(index) => cmd.selectAt(index)}
           />
 
-          <StatusBar />
+          {(() => {
+            const command = cmd.filtered[cmd.selectedIndex];
+            return command ? (
+              <box
+                paddingX={1}
+                paddingTop={1}
+                marginTop={1}
+                border={["top"]}
+                borderColor="#2A2A3A"
+              >
+                <text attributes={TextAttributes.DIM}>
+                  {command.description}
+                </text>
+              </box>
+            ) : null;
+          })()}
         </box>
+      )}
+
+      {/* input area */}
+      <box
+        paddingX={2}
+        paddingY={1}
+        backgroundColor="#1A1A24"
+        gap={1}
+        flexDirection="column"
+      >
+        <textarea
+          ref={textareaRef}
+          focused={!disabled}
+          keyBindings={TEXTAREA_KEY_BINDINGS}
+          placeholder={`Ask anything... " Fix a bug in the database" `}
+          onContentChange={handleContentChange}
+        />
+
+        <StatusBar />
       </box>
     </box>
   );

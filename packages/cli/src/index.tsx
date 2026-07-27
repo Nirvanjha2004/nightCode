@@ -11,11 +11,22 @@ function App() {
       backgroundColor="#0D0D12"
       width="100%"
       height="100%"
-      gap={2}
     >
-
-      <Header/>
-      <box>
+      <box
+        width={88}
+        border={true}
+        borderStyle="rounded"
+        borderColor="#89B4FA"
+        title=" NightCode "
+        titleColor="#89B4FA"
+        titleAlignment="center"
+        shouldFill={false}
+        paddingX={3}
+        paddingY={2}
+        flexDirection="column"
+        gap={2}
+      >
+        <Header />
         <InputBar onSubmit={() => {}} />
       </box>
     </box>
