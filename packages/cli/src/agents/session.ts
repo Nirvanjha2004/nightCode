@@ -1,6 +1,6 @@
 import type { SessionType } from "./types";
 
-export class Session {  
+export class SessionManager {  
     private session = new Map<string, SessionType>();
 
     create(session: SessionType) {

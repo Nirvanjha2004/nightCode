@@ -1,6 +1,6 @@
 import type { Tool } from "./types";
 
-class ToolRegistry {
+export class ToolRegistry {
     private tools = new Map<string, Tool<any>>();
 
     register(tool: Tool<any>) {

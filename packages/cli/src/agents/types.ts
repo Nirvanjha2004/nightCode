@@ -73,3 +73,12 @@ export type MessageType = {
     createdAt : Date;
     updatedAt : Date;
 }
+
+// Context types
+export type ContextType = {
+    sessionId : string;
+    messages : MessageType[];
+    model : string;
+    tools : Tool<any>[];
+    systemPrompt : string;
+}
