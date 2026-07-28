@@ -55,3 +55,21 @@ export type EditArgs = {
     newText: string;
 };
 
+// Session types
+export type SessionType = {
+    sessionId : string;
+    title : string;
+    model : string;
+    createdAt : Date;
+    updatedAt : Date;
+}
+
+// Message types
+export type MessageType = {
+    messageId : string;
+    sessionId : string;
+    role : string;
+    content : string;
+    createdAt : Date;
+    updatedAt : Date;
+}
