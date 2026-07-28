@@ -66,14 +66,23 @@ export type SessionType = {
 
 // Message types
 export type MessageType = {
-    messageId : string;
-    sessionId : string;
-    role : string;
-    content : string;
-    createdAt : Date;
-    // keep it optional for now
-    updatedAt?: Date; 
-}
+    messageId: string;
+    sessionId: string;
+
+    role: "system" | "user" | "assistant" | "tool";
+
+    content: string;
+
+    createdAt: Date;
+
+    toolCall?: {
+        id: string;
+        name: string;
+        args: Record<string, unknown>;
+    };
+
+    toolCallId?: string;
+};
 
 // Context types
 export type ContextType = {

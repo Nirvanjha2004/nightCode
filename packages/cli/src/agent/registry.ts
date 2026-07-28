@@ -1,9 +1,9 @@
 import type { Tool } from "./types";
 
 export class ToolRegistry {
-    private tools = new Map<string, Tool<any>>();
+    private tools = new Map<string, Tool>();
 
-    register(tool: Tool<any>) {
+    register(tool: Tool) {
         this.tools.set(tool.name, tool);
     }
 
