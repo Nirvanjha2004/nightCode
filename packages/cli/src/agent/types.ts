@@ -1,8 +1,19 @@
-export type Tool<Targs = Record<string, string>> = {
-    name : string;
-    description : string;
-    exec : (args : Targs) => Promise<string>;
-}
+import type Groq from "groq-sdk";
+
+// types.ts
+export type Tool = {
+    name: string;
+    description: string;
+    parameters: {
+        type: "object";
+        properties: Record<string, {
+            type: string;
+            description?: string;
+        }>;
+        required?: string[];
+    };
+    exec: (args: Record<string, unknown>) => Promise<unknown>;
+};
 
 export type ReadArgs = {
     file: string;
@@ -63,6 +74,11 @@ export type SessionType = {
     createdAt : Date;
     updatedAt : Date;
 }
+export type ToolCall = {
+    id: string;
+    name: string;
+    args: Record<string, unknown>; // unknown > string, args can be numbers/booleans/nested too
+};
 
 // Message types
 export type MessageType = {
@@ -75,20 +91,17 @@ export type MessageType = {
 
     createdAt: Date;
 
-    toolCall?: {
-        id: string;
-        name: string;
-        args: Record<string, unknown>;
-    };
+    toolCalls?: ToolCall[];
 
     toolCallId?: string;
 };
 
 // Context types
+// types.ts
 export type ContextType = {
-    sessionId : string;
-    messages : MessageType[];
-    model : string;
-    tools : Tool<any>[];
-    systemPrompt : string;
-}
+    sessionId: string;
+    model: string;
+    systemPrompt: string;
+    messages: MessageType[];
+    tools: Groq.Chat.Completions.ChatCompletionTool[];
+};

@@ -1,8 +1,8 @@
+import Groq from "groq-sdk";
 import { MessageManager } from "./messages";
 import { SessionManager } from "./session";
-import { ToolRegistry } from "./registry";  
+import { ToolRegistry } from "./registry";
 import type { ContextType } from "./types";
-
 
 export class ContextBuilder {
     constructor(
@@ -12,7 +12,6 @@ export class ContextBuilder {
     ) {}
 
     build(sessionId: string): ContextType {
-
         const session = this.sessionManager.get(sessionId);
 
         if (!session) {
@@ -21,7 +20,17 @@ export class ContextBuilder {
 
         const messages = this.messageManager.get(sessionId);
 
-        const tools = this.toolRegistry.list();
+        // Map internal Tool → Groq's ChatCompletionTool shape here
+        const tools: Groq.Chat.Completions.ChatCompletionTool[] = this.toolRegistry
+            .list()
+            .map((tool) => ({
+                type: "function" as const,   // required by Groq, missing from your Tool type
+                function: {
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.parameters, // JSON schema Groq uses to fill args
+                },
+            }));
 
         return {
             sessionId,

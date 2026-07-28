@@ -1,3 +1,5 @@
+import type { ToolCall } from "../agent/types";
+
 export type LLMResponse =
     | {
           type: "text";
@@ -5,8 +7,5 @@ export type LLMResponse =
       }
     | {
           type: "tool_call";
-          toolCall: {
-              name: string;
-              args: Record<string, unknown>;
-          };
+          toolCall: ToolCall[];
       };
