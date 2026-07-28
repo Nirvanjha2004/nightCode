@@ -71,7 +71,8 @@ export type MessageType = {
     role : string;
     content : string;
     createdAt : Date;
-    updatedAt : Date;
+    // keep it optional for now
+    updatedAt?: Date; 
 }
 
 // Context types
