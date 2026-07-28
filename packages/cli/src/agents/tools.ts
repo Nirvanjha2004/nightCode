@@ -1,18 +1,36 @@
-// Tools
+import { readFile, writeFile } from "node:fs/promises";
+import type { Tool, readArgs, writeArgs } from "./types";
 
-import type { Tool , readArgs, writeArgs} from "./types";
+export const read: Tool<readArgs> = {
+    name: "read",
+    description: "Read the contents of a file",
 
-export const read : Tool<readArgs> = {
-    name : "read",
-    description : "Read a file",
-    exec : async (args : readArgs) => {
-        return `Read file ${args.file}`;
-    }
-}
-export const write : Tool<writeArgs> = {
-    name : "write",
-    description : "Write a file",
-    exec : async (args : writeArgs) => {
-        return `Write file ${args.file} with content ${args.content}`;
-    }
-}
+    exec: async ({ file }) => {
+        try {
+            const content = await readFile(file, "utf-8");
+            return content;
+        } catch (error) {
+            if (error instanceof Error) {
+                throw new Error(`Failed to read "${file}": ${error.message}`);
+            }
+            throw new Error(`Failed to read "${file}".`);
+        }
+    },
+};
+
+export const write: Tool<writeArgs> = {
+    name: "write",
+    description: "Write content to a file",
+
+    exec: async ({ file, content }) => {
+        try {
+            await writeFile(file, content, "utf-8");
+            return `Successfully wrote to "${file}".`;
+        } catch (error) {
+            if (error instanceof Error) {
+                throw new Error(`Failed to write "${file}": ${error.message}`);
+            }
+            throw new Error(`Failed to write "${file}".`);
+        }
+    },
+};
