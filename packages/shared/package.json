@@ -1,0 +1,16 @@
+{
+    "name": "@nightcode/shared",
+    "version": "0.0.1",
+    "description": "Shared components for NightCode",
+    "main": "index.ts",
+    "types": "index.d.ts",
+    "license": "MIT",
+    "type": "module",
+    "private": true,
+    "exports": {
+        ".": "./index.ts"
+    },
+    "dependencies": {
+        "zod": "^4.4.3"
+    }
+}
