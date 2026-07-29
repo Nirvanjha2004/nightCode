@@ -7,17 +7,28 @@ import { CommandMenu } from "./commands-menu";
 import { useCommandMenu } from "./commands-menu/use-command-menu";
 import { logger } from "../src/logger";
 
+const C = {
+    bg:       "#0D0D12",
+    surface0: "#13131A",
+    surface1: "#1A1A24",
+    surface2: "#222233",
+    overlay0: "#2A2A3A",
+    subtitle: "#6B6B7B",
+    text:     "#CDD6F4",
+    blue:     "#89B4FA",
+    green:    "#A6E3A1",
+};
+
 type Props = {
     onSubmit: (text: string) => void;
     disabled?: boolean;
     model?: string;
 };
 
-export function InputBar({ onSubmit, disabled = false, model }: Props) {
+export function InputBar({ onSubmit, disabled = false, model = "groq" }: Props) {
     const textareaRef = useRef<TextareaRenderable>(null);
     const scrollRef   = useRef<ScrollBoxRenderable | null>(null);
     const cmd         = useCommandMenu();
-
     const cmdRef = useRef(cmd);
     cmdRef.current = cmd;
 
@@ -73,7 +84,6 @@ export function InputBar({ onSubmit, disabled = false, model }: Props) {
         }
 
         // ── Shift + Enter → newline ──────────────────────────────
-        // textarea.newLine() is the correct API, not insertText("\n")
         if (isEnter && keyEvent.shift) {
             textareaRef.current?.newLine();
             keyEvent.preventDefault();
@@ -96,7 +106,6 @@ export function InputBar({ onSubmit, disabled = false, model }: Props) {
                 return;
             }
 
-            // textarea.setText("") is the correct clear API, not clear()
             textareaRef.current?.setText("");
             c.close();
             logger.info(`[InputBar] Submit: "${trimmed.slice(0, 120)}"`);
@@ -109,22 +118,22 @@ export function InputBar({ onSubmit, disabled = false, model }: Props) {
     });
 
     return (
-        <box flexDirection="column" gap={2}>
+        <box flexDirection="column">
             {/* Command menu dropdown */}
             {cmd.isOpen && (
                 <box
                     border={true}
                     borderStyle="rounded"
-                    borderColor="#89B4FA"
-                    backgroundColor="#13131A"
+                    borderColor={C.blue}
+                    backgroundColor={C.surface0}
                     padding={1}
                     flexDirection="column"
                 >
                     <box paddingX={1} paddingBottom={1}>
-                        <text attributes={TextAttributes.BOLD} fg="#89B4FA">
+                        <text attributes={TextAttributes.BOLD} fg={C.blue}>
                             Commands
                         </text>
-                        <text attributes={TextAttributes.DIM} fg="#6B6B7B">
+                        <text attributes={TextAttributes.DIM} fg={C.subtitle}>
                             {" "}· type to filter
                         </text>
                     </box>
@@ -145,9 +154,9 @@ export function InputBar({ onSubmit, disabled = false, model }: Props) {
                                 paddingTop={1}
                                 marginTop={1}
                                 border={["top"]}
-                                borderColor="#2A2A3A"
+                                borderColor={C.overlay0}
                             >
-                                <text attributes={TextAttributes.DIM}>
+                                <text attributes={TextAttributes.DIM} fg={C.subtitle}>
                                     {command.description}
                                 </text>
                             </box>
@@ -160,9 +169,9 @@ export function InputBar({ onSubmit, disabled = false, model }: Props) {
             <box
                 paddingX={2}
                 paddingY={1}
-                backgroundColor={disabled ? "#13131A" : "#1A1A24"}
-                gap={1}
+                backgroundColor={disabled ? C.surface0 : C.surface1}
                 flexDirection="column"
+                gap={1}
             >
                 <textarea
                     ref={textareaRef}
@@ -171,11 +180,11 @@ export function InputBar({ onSubmit, disabled = false, model }: Props) {
                     placeholder={
                         disabled
                             ? "Agent is thinking..."
-                            : `Ask anything... "Fix a bug in the database"`
+                            : "Ask anything... (Shift+Enter for newline)"
                     }
                 />
 
-                <StatusBar />
+                <StatusBar model={model} chars={textareaRef.current?.plainText?.length ?? 0} />
             </box>
         </box>
     );
