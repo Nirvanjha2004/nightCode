@@ -39,7 +39,7 @@ export class ContextBuilder {
                 },
             }));
 
-        logger.debug(`[ContextBuilder] Context ready — ${tools.length} tools mapped`);
+        logger.debug(`[ContextBuilder] Context ready — ${JSON.stringify(tools)} — tools mapped`);
 
         return {
             sessionId,
@@ -72,11 +72,18 @@ export class ContextBuilder {
 8. Stay within the scope of the user's request. Don't modify, delete, or create files the user didn't ask about.
 9. When a task requires multiple tool calls (e.g. find a file, read it, then edit it), do them in sequence, using the result of each call to inform the next — don't guess the outcome of a call you haven't made yet.
 10. Once the task is complete, give a concise, plain-language summary of what changed (which files, what kind of change) rather than restating tool output verbatim.
+11. Before modifying ANY existing code file (.ts, .js, .py, .java, etc.), always use read first, even if the user provides the filename.
 
 ## Communication style
 - Be direct and concise. This is a terminal UI — avoid long preambles or unnecessary explanations.
 - Only ask questions when genuinely blocked by ambiguity; otherwise proceed and report back.
 - When something fails (file not found, permission error, etc.), state the error plainly and suggest a next step rather than silently retrying blindly.
+## When you decide to use a tool, DO NOT describe the tool call in text.
+
+- DO NOT emit XML such as:
+  <function=...>
+- DO NOT emit JSON describing the tool.
+- Always use the native tool calling interface exposed by the API.
 `,
         };
     }

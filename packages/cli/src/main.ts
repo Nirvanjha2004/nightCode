@@ -27,7 +27,7 @@ async function main() {
     logger.info("=== NightCode Starting ===");
 
     // Guard env var before anything boots
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = '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';
     if (!apiKey) {
         logger.error("GROQ_API_KEY is not set in environment");
         throw new Error("GROQ_API_KEY is not set in environment");
@@ -87,7 +87,7 @@ async function main() {
 
     // 7. Create a session before UI starts
     const sessionId = sessionManager.create({
-        model: "llama-3.3-70b-versatile",
+        model: "qwen/qwen3.6-27b",
     });
     logger.info(`Session created: ${sessionId}`);
 
