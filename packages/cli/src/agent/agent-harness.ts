@@ -1,28 +1,31 @@
-import { ContextBuilder } from "./context";
-import { MessageManager } from "./messages";
-import { ToolRegistry } from "./registry";
-import { AgentLoop } from "./loop";
-import { SessionManager } from "./session";
+import type { ContextBuilder } from "./context";
+import type { MessageManager } from "./messages";
+import type { ToolRegistry } from "./registry";
+import type { SessionManager } from "./session";
+import type { Tool } from "./types";
+import { logger } from "../logger";
 
 export class AgentHarness {
-    public sessionManager: SessionManager;
-    public messageManager: MessageManager;
-    public contextBuilder: ContextBuilder;
-    public toolRegistry: ToolRegistry;
-    private loop: AgentLoop;
-
-    constructor(private llm: any) {
-        this.sessionManager = new SessionManager();
-        this.messageManager = new MessageManager();
-        this.toolRegistry = new ToolRegistry();
-        this.contextBuilder = new ContextBuilder(this.messageManager,  this.sessionManager, this.toolRegistry);
-        
-        // Loop me harness pass kar rahe hain
-        this.loop = new AgentLoop(this, this.llm);
+    constructor(
+        public messageManager: MessageManager,
+        public sessionManager: SessionManager,
+        public toolRegistry: ToolRegistry,
+        public contextBuilder: ContextBuilder,
+    ) {
+        logger.debug("AgentHarness constructed");
     }
 
-    // High-level entrypoint for the application
-    async run(sessionId: string, userInput: string): Promise<string> {
-        return await this.loop.execute(sessionId, userInput);
+    // Convenience method to register tools directly via harness
+    registerTool(tool: Tool): void {
+        logger.info(`[Harness] Registering tool: ${tool.name}`);
+        this.toolRegistry.register(tool);
+    }
+
+    // Convenience method to create a session directly via harness
+    createSession(model: string): string {
+        logger.info(`[Harness] Creating session with model: ${model}`);
+        const sessionId = this.sessionManager.create({ model });
+        logger.debug(`[Harness] Session created: ${sessionId}`);
+        return sessionId;
     }
 }

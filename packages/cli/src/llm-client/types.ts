@@ -6,6 +6,6 @@ export type LLMResponse =
           content: string;
       }
     | {
-          type: "tool_call";
-          toolCall: ToolCall[];
+          type: "tool_calls";
+          toolCalls: ToolCall[];
       };

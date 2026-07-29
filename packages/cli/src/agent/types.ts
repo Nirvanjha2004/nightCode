@@ -69,10 +69,9 @@ export type EditArgs = {
 // Session types
 export type SessionType = {
     sessionId : string;
-    title : string;
     model : string;
     createdAt : Date;
-    updatedAt : Date;
+    updatedAt?: Date;
 }
 export type ToolCall = {
     id: string;
@@ -97,7 +96,6 @@ export type MessageType = {
 };
 
 // Context types
-// types.ts
 export type ContextType = {
     sessionId: string;
     model: string;
