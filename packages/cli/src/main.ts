@@ -22,6 +22,9 @@ import {
     renameTool,
     copy,
 } from "./agent/tools";
+import { EpisodicMemoryManager } from "./agent/memory/EpisodicMemoryManager";
+import { SemanticMemoryManager } from "./agent/memory/SemanticMemoryManager";
+import { ProceduralMemoryManager } from "./agent/memory/ProceduralMemoryManager";
 
 async function main() {
     logger.info("=== NightCode Starting ===");
@@ -38,7 +41,10 @@ async function main() {
     const messageManager = new MessageManager();
     const sessionManager = new SessionManager();
     const toolRegistry   = new ToolRegistry();
-    logger.info("Managers initialized (MessageManager, SessionManager, ToolRegistry)");
+    const episodicMemory = new EpisodicMemoryManager();
+    const semanticMemory = new SemanticMemoryManager();
+    const proceduralMemory = new ProceduralMemoryManager();
+    logger.info("Managers initialized (MessageManager, SessionManager, ToolRegistry, EpisodicMemory, SemanticMemory, ProceduralMemory)");
 
     // 2. Register ALL tools into registry
     logger.debug("Registering built-in tools...");
@@ -72,7 +78,10 @@ async function main() {
         messageManager,
         sessionManager,
         toolRegistry,
-        contextBuilder
+        contextBuilder,
+        episodicMemory,
+        semanticMemory,
+        proceduralMemory
     );
     logger.info("AgentHarness created");
 

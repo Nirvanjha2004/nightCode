@@ -16,7 +16,7 @@ export class EpisodicMemoryManager {
     this.episodicFile = episodicFile;
     this.jinaModel = jinaModel;
 
-    const key = process.env.JINA_API_KEY;
+    const key = 'jina_8ad270a2482c499ba6484c0ce28d37d2xbEYWQIIXXYyp2bh3uxKC1i81-pG';
     if (!key) throw new Error("JINA_API_KEY not set in environment");
     this.jinaApiKey = key;
 

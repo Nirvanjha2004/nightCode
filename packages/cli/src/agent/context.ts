@@ -42,6 +42,14 @@ var systemPrompt = `You are NightCode, a terminal-based AI agent that helps the 
   <function=...>
 - DO NOT emit JSON describing the tool.
 - Always use the native tool calling interface exposed by the API.
+
+## Memory system — DO NOT touch manually
+There is an automatic background memory system that observes and stores information after each task. 
+You must NEVER read, write, edit, or list files inside the "memory/" directory yourself — 
+this includes memory/semantic.json, memory/procedural.md, and memory/episodic/.
+This is managed entirely outside your control. If the user shares personal information (name, preferences, stack), 
+just acknowledge it naturally in conversation — do not attempt to save it to any file.
+
 `
 export class ContextBuilder {
     constructor(
