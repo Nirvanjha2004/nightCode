@@ -89,6 +89,7 @@ export const read: Tool = {
 
 export const write: Tool = {
     name: "write",
+    destructive: true,
     description:
         "Create a new file with the given content, or completely overwrite an existing file if it already exists. " +
         "This replaces the ENTIRE file — any content not included in `content` will be lost. " +
@@ -162,6 +163,7 @@ export const append: Tool = {
 
 export const edit: Tool = {
     name: "edit",
+    destructive: true,
     description:
         "Make a targeted, surgical change inside an existing file by replacing one exact occurrence of `oldText` " +
         "with `newText`. This is the PREFERRED way to modify an existing file — safer than `write`, since it " +
@@ -208,6 +210,7 @@ export const edit: Tool = {
 
 export const del: Tool = {
     name: "delete",
+    destructive: true,
     description:
         "Permanently delete a single file. This action is irreversible — there is no undo or recycle bin. " +
         "Only use this when the target file has been explicitly confirmed (e.g. via a prior `ls`, `read`, or " +
@@ -372,6 +375,7 @@ export const find: Tool = {
 
 export const renameTool: Tool = {
     name: "rename",
+    destructive: true,
     description:
         "Rename a file, or move it to a new path (renaming and moving are the same operation on most filesystems). " +
         "The destination's parent directory must already exist — use `mkdir` first if it doesn't. " +
@@ -405,6 +409,7 @@ export const renameTool: Tool = {
 
 export const copy: Tool = {
     name: "copy",
+    destructive: true,
     description:
         "Copy a file to a new location, leaving the original file untouched. If a file already exists at the " +
         "destination path, it will typically be overwritten — verify the destination is correct and intentional " +

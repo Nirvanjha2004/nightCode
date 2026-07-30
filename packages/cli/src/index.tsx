@@ -2,8 +2,10 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Header } from "../components/header";
 import { InputBar } from "../components/input-bar"; 
 import { TextAttributes } from "@opentui/core";
+import { useKeyboard } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import type { AgentLoop } from "../src/agent/loop";
+import type { ConfirmHook } from "./agent/types";
 import { logger } from "./logger";
 
 // Display-only — agent context lives in backend MessageManager, not here
@@ -43,6 +45,61 @@ const ROLE_CONFIG: Record<DisplayMessage["role"], { label: string; fg: string; b
     assistant: { label: "NightCode", fg: C.green,  bg: "#15251A", border: C.green },
     error:     { label: "Error",     fg: C.red,    bg: "#2A1515", border: C.red },
 };
+
+// ── Confirmation dialog ────────────────────────────────────────────────────────
+type PendingConfirm = {
+    resolve: (value: boolean) => void;
+    message: string;
+    toolName: string;
+    args: Record<string, unknown>;
+};
+
+function ConfirmDialog({ pending }: { pending: PendingConfirm }) {
+    const argsStr = JSON.stringify(pending.args).slice(0, 200);
+
+    return (
+        <box paddingX={2} paddingY={1} flexDirection="column">
+            <box
+                border={true}
+                borderStyle="rounded"
+                borderColor={C.peach}
+                backgroundColor="#1A1A15"
+                padding={1}
+                flexDirection="column"
+                gap={1}
+            >
+                {/* Header */}
+                <box flexDirection="row" gap={1} alignItems="center">
+                    <text fg={C.peach}>⚠</text>
+                    <text attributes={TextAttributes.BOLD} fg={C.peach}>
+                        Destructive Action
+                    </text>
+                </box>
+
+                {/* Tool info — use a single text element with interpolated string */}
+                <box paddingX={1}>
+                    <text fg={C.text}>
+                        {pending.toolName}({argsStr})
+                    </text>
+                </box>
+
+                {/* Instructions */}
+                <box paddingX={1} flexDirection="row" gap={1}>
+                    <text fg={C.green} attributes={TextAttributes.BOLD}>[Y]</text>
+                    <text fg={C.subtitle}>Confirm and execute</text>
+                </box>
+                <box paddingX={1} flexDirection="row" gap={1}>
+                    <text fg={C.red} attributes={TextAttributes.BOLD}>[N]</text>
+                    <text fg={C.subtitle}>Cancel this operation</text>
+                </box>
+                <box paddingX={1} flexDirection="row" gap={1}>
+                    <text fg={C.overlay1} attributes={TextAttributes.DIM}>[Esc]</text>
+                    <text fg={C.subtitle}>Cancel operation (same as N)</text>
+                </box>
+            </box>
+        </box>
+    );
+}
 
 // ── Simple animated dots component ────────────────────────────────────────────
 function ThinkingIndicator() {
@@ -130,6 +187,9 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
 export function App({ sessionId, agentLoop }: Props) {
     const [messages, setMessages] = useState<DisplayMessage[]>([]);
     const [loading, setLoading]   = useState(false);
+    const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+    const pendingRef = useRef(pendingConfirm);
+    pendingRef.current = pendingConfirm;
     const scrollRef = useRef<ScrollBoxRenderable | null>(null);
 
     const push = (role: DisplayMessage["role"], content: string) => {
@@ -139,14 +199,52 @@ export function App({ sessionId, agentLoop }: Props) {
         ]);
     };
 
+    // ── Keyboard handler: intercept Y/N/Esc when confirmation is pending ──
+    // Use ref to avoid stale closures (useKeyboard may capture the handler once)
+    useKeyboard((keyEvent) => {
+        const p = pendingRef.current;
+        if (!p) return;
+
+        // Y → confirm
+        if (keyEvent.name === "y") {
+            logger.info(`[UI] User confirmed: ${p.toolName}`);
+            p.resolve(true);
+            setPendingConfirm(null);
+            keyEvent.preventDefault();
+            keyEvent.stopPropagation();
+            return;
+        }
+
+        // N or Escape → reject
+        if (keyEvent.name === "n" || keyEvent.name === "escape") {
+            logger.info(`[UI] User rejected: ${p.toolName}`);
+            p.resolve(false);
+            setPendingConfirm(null);
+            keyEvent.preventDefault();
+            keyEvent.stopPropagation();
+            return;
+        }
+    });
+
+    // ── Build the confirm hook for the agent loop ─────────────────────
+    const buildConfirmHook = useCallback((): ConfirmHook => {
+        return async (_msg: string, toolName: string, args: Record<string, unknown>): Promise<boolean> => {
+            return new Promise<boolean>((resolve) => {
+                setPendingConfirm({ resolve, message: _msg, toolName, args });
+            });
+        };
+    }, []);
+
     const handleSubmit = useCallback(async (text: string) => {
         const trimmed = text.trim();
         if (!trimmed || loading) return;
 
         logger.info(`[UI] User submitted: "${trimmed.slice(0, 100)}"`);
         push("user", trimmed);
-        setLoading(true);        try {
-            const response = await agentLoop.execute(sessionId, trimmed);
+        setLoading(true);
+        try {
+            const confirmHook = buildConfirmHook();
+            const response = await agentLoop.execute(sessionId, trimmed, confirmHook);
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
         } catch (err) {
@@ -158,7 +256,7 @@ export function App({ sessionId, agentLoop }: Props) {
         } finally {
             setLoading(false);
         }
-    }, [loading, sessionId, agentLoop]);
+    }, [loading, sessionId, agentLoop, buildConfirmHook]);
 
     return (
         <box
@@ -222,13 +320,18 @@ export function App({ sessionId, agentLoop }: Props) {
                 <box height={1} />
             </scrollbox>
 
+            {/* ── Confirmation dialog (fixed above input bar) ───────── */}
+            {pendingConfirm && (
+                <ConfirmDialog pending={pendingConfirm} />
+            )}
+
             {/* ── Input area ──────────────────────────────────────────── */}
             <box
                 border={["top"]}
                 borderColor={C.overlay0}
                 backgroundColor={C.surface0}
             >
-                <InputBar onSubmit={handleSubmit} disabled={loading} />
+                <InputBar onSubmit={handleSubmit} disabled={loading || !!pendingConfirm} />
             </box>
         </box>
     );

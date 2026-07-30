@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentHarness } from "./agent-harness";
-import type { ToolCall } from "./types";
+import type { ConfirmHook, ToolCall } from "./types";
 import { logger } from "../logger";
 
 export class AgentLoop {
@@ -10,7 +10,7 @@ export class AgentLoop {
         private maxIterations: number = 10
     ) { }
 
-    async execute(sessionId: string, userInput: string): Promise<string> {
+    async execute(sessionId: string, userInput: string, confirmHook?: ConfirmHook): Promise<string> {
         logger.info(`[AgentLoop] Starting execution — session=${sessionId}`, {
             userInput: userInput.slice(0, 200),
         });
@@ -110,7 +110,7 @@ export class AgentLoop {
 
                 // Execute each tool call
                 for (const toolCall of toolCalls) {
-                    let result: string;
+                    let result = "";
                     const startTime = Date.now();
 
                     try {
@@ -120,13 +120,35 @@ export class AgentLoop {
                             logger.warn(`[AgentLoop] Tool "${toolCall.name}" not registered`);
                             result = `Error: Tool "${toolCall.name}" is not registered.`;
                         } else {
-                            logger.debug(`[AgentLoop] Executing tool: ${toolCall.name}`, { args: toolCall.args });
-                            const raw = await tool.exec(toolCall.args);
-                            result = typeof raw === "string" ? raw : JSON.stringify(raw);
-                            const elapsed = Date.now() - startTime;
-                            logger.info(`[AgentLoop] Tool "${toolCall.name}" completed in ${elapsed}ms`, {
-                                resultLen: result.length,
-                            });
+                            // ── Human-in-the-loop: pause before destructive tools ──
+                            let shouldSkip = false;
+                            if (tool.destructive && confirmHook) {
+                                const summary = JSON.stringify(toolCall.args).slice(0, 200);
+                                const msg = `Destructive action: ${toolCall.name}(${summary})`;
+                                logger.info(`[AgentLoop] ⏸ Pausing for user confirmation on ${toolCall.name}`, {
+                                    args: toolCall.args,
+                                });
+                                const confirmed = await confirmHook(msg, toolCall.name, toolCall.args);
+                                if (!confirmed) {
+                                    logger.info(`[AgentLoop] ✋ User rejected ${toolCall.name}`);
+                                    result = `User rejected the ${toolCall.name} operation. Inform them and do not retry unless asked.`;
+                                    const elapsed = Date.now() - startTime;
+                                    logger.info(`[AgentLoop] Tool "${toolCall.name}" skipped (user rejected) in ${elapsed}ms`);
+                                    shouldSkip = true;
+                                } else {
+                                    logger.info(`[AgentLoop] ✅ User confirmed ${toolCall.name} — proceeding`);
+                                }
+                            }
+
+                            if (!shouldSkip) {
+                                logger.debug(`[AgentLoop] Executing tool: ${toolCall.name}`, { args: toolCall.args });
+                                const raw = await tool.exec(toolCall.args);
+                                result = typeof raw === "string" ? raw : JSON.stringify(raw);
+                                const elapsed = Date.now() - startTime;
+                                logger.info(`[AgentLoop] Tool "${toolCall.name}" completed in ${elapsed}ms`, {
+                                    resultLen: result.length,
+                                });
+                            }
                         }
                     } catch (err) {
                         const errMsg = err instanceof Error ? err.message : String(err);

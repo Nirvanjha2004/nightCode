@@ -4,6 +4,8 @@ import type Groq from "groq-sdk";
 export type Tool = {
     name: string;
     description: string;
+    /** If true, the agent will pause and ask the user to confirm before executing this tool. */
+    destructive?: boolean;
     parameters: {
         type: "object";
         properties: Record<string, {
@@ -14,6 +16,17 @@ export type Tool = {
     };
     exec: (args: Record<string, unknown>) => Promise<unknown>;
 };
+
+/**
+ * A hook the UI provides to let the agent loop pause and ask the user
+ * to confirm or reject a destructive action before it executes.
+ * Resolves `true` if the user approved, `false` if they rejected.
+ */
+export type ConfirmHook = (
+    message: string,
+    toolName: string,
+    args: Record<string, unknown>
+) => Promise<boolean>;
 
 export type ReadArgs = {
     file: string;
