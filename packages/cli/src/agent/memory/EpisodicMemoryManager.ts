@@ -3,7 +3,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import type { EpisodicMemory } from "./types";
 
-export class MemoryManager {
+export class EpisodicMemoryManager {
   private memoryCache: EpisodicMemory[] = [];
   private readonly episodicFile: string;
   private readonly jinaApiKey: string;

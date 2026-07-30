@@ -4,49 +4,7 @@ import { SessionManager } from "./session";
 import { ToolRegistry } from "./registry";
 import type { ContextType } from "./types";
 import { logger } from "../logger";
-
-export class ContextBuilder {
-    constructor(
-        private messageManager: MessageManager,
-        private sessionManager: SessionManager,
-        private toolRegistry: ToolRegistry
-    ) {
-        logger.debug("ContextBuilder constructed");
-    }
-
-    build(sessionId: string): ContextType {
-        logger.debug(`[ContextBuilder] Building context for session=${sessionId}`);
-
-        const session = this.sessionManager.get(sessionId);
-
-        if (!session) {
-            logger.error(`[ContextBuilder] Session not found: ${sessionId}`);
-            throw new Error(`Session ${sessionId} not found`);
-        }
-
-        const messages = this.messageManager.get(sessionId);
-        logger.debug(`[ContextBuilder] Session "${sessionId}" — model=${session.model}, messageCount=${messages.length}`);
-
-        // Map internal Tool → Groq's ChatCompletionTool shape
-        const toolList = this.toolRegistry.list();
-        const tools: Groq.Chat.Completions.ChatCompletionTool[] = toolList
-            .map((tool) => ({
-                type: "function" as const,
-                function: {
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: tool.parameters,
-                },
-            }));
-
-        logger.debug(`[ContextBuilder] Context ready — ${JSON.stringify(tools)} — tools mapped`);
-
-        return {
-            sessionId,
-            model: session.model,
-            messages,
-            tools,
-            systemPrompt: `You are NightCode, a terminal-based AI agent that helps the user read, write, and manage files on their local filesystem.
+var systemPrompt = `You are NightCode, a terminal-based AI agent that helps the user read, write, and manage files on their local filesystem.
 
 ## Available tools
 - read(file) — read the full contents of a file
@@ -84,7 +42,51 @@ export class ContextBuilder {
   <function=...>
 - DO NOT emit JSON describing the tool.
 - Always use the native tool calling interface exposed by the API.
-`,
+`
+export class ContextBuilder {
+    constructor(
+        private messageManager: MessageManager,
+        private sessionManager: SessionManager,
+        private toolRegistry: ToolRegistry
+    ) {
+        logger.debug("ContextBuilder constructed");
+    }
+
+    build(sessionId: string, memoryContext?: string): ContextType {
+        logger.debug(`[ContextBuilder] Building context for session=${sessionId}`);
+
+        const session = this.sessionManager.get(sessionId);
+
+        if (!session) {
+            logger.error(`[ContextBuilder] Session not found: ${sessionId}`);
+            throw new Error(`Session ${sessionId} not found`);
+        }
+
+        const messages = this.messageManager.get(sessionId);
+        logger.debug(`[ContextBuilder] Session "${sessionId}" — model=${session.model}, messageCount=${messages.length}`);
+
+        // Map internal Tool → Groq's ChatCompletionTool shape
+        const toolList = this.toolRegistry.list();
+        const tools: Groq.Chat.Completions.ChatCompletionTool[] = toolList
+            .map((tool) => ({
+                type: "function" as const,
+                function: {
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.parameters,
+                },
+            }));
+        if (memoryContext) {
+            systemPrompt = `${systemPrompt}\n\n${memoryContext}`;
+        }
+        logger.debug(`[ContextBuilder] Context ready — ${JSON.stringify(tools)} — tools mapped`);
+
+        return {
+            sessionId,
+            model: session.model,
+            messages,
+            tools,
+            systemPrompt: systemPrompt,
         };
     }
 }
