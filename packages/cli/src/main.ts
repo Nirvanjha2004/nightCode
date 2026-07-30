@@ -25,6 +25,7 @@ import {
 import { EpisodicMemoryManager } from "./agent/memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./agent/memory/SemanticMemoryManager";
 import { ProceduralMemoryManager } from "./agent/memory/ProceduralMemoryManager";
+import Groq from "groq-sdk";
 
 async function main() {
     logger.info("=== NightCode Starting ===");
@@ -68,7 +69,10 @@ async function main() {
     const contextBuilder = new ContextBuilder(
         messageManager,
         sessionManager,
-        toolRegistry
+        toolRegistry,
+        new Groq({
+            apiKey,
+        })
     );
     logger.info("ContextBuilder created");
 

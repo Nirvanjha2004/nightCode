@@ -1,7 +1,17 @@
 {
   "memory_location": "/episodic/",
   "user": {
-    "name": "Nirvan Jha",
+    "name": "Nirvan",
     "location": "IIITDM Kancheepuram"
-  }
+  },
+  "agent-harness": {
+    "ts": "orchestrates core subsystems"
+  },
+  "MessageManager": "manages conversation/message state",
+  "SessionManager": "creates and tracks sessions",
+  "ToolRegistry": "registers and stores available tools",
+  "ContextBuilder": "builds prompt context for the LLM",
+  "EpisodicMemoryManager": "stores/retrieves past event memories",
+  "SemanticMemoryManager": "stores key-value facts",
+  "ProceduralMemoryManager": "stores rules and triggers"
 }

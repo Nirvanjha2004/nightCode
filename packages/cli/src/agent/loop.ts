@@ -44,7 +44,7 @@ export class AgentLoop {
             // Step 2: Build context
             let context;
             try {
-                context = this.harness.contextBuilder.build(sessionId, memoryContext);
+                context = await this.harness.contextBuilder.build(sessionId, memoryContext);
                 logger.debug(`[AgentLoop] Context built — ${context.messages.length} messages, ${context.tools.length} tools`);
             } catch (err) {
                 logger.error(`[AgentLoop] Failed to build context: ${err instanceof Error ? err.message : String(err)}`, {
