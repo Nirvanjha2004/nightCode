@@ -25,13 +25,25 @@ export class AgentLoop {
         });
         logger.debug(`[AgentLoop] User message stored (len=${userInput.length})`);
 
+        // Step 1.5: Build memory context ONCE per user turn (not per iteration)
+        let memoryContext = "";
+        try {
+            memoryContext = await this.harness.buildMemoryContext(userInput);
+            logger.debug(`[AgentLoop] Memory context built (len=${memoryContext.length})`);
+        } catch (err) {
+            logger.error(`[AgentLoop] Failed to build memory context: ${err instanceof Error ? err.message : String(err)}`, {
+                stack: err instanceof Error ? err.stack : undefined,
+            });
+            // non-fatal — proceed without memory context rather than blocking the whole task
+            memoryContext = "";
+        }
+
         for (let iter = 1; iter <= this.maxIterations; iter++) {
             logger.info(`[AgentLoop] Iteration ${iter}/${this.maxIterations}`);
 
             // Step 2: Build context
             let context;
             try {
-                const memoryContext = await this.harness.buildMemoryContext(userInput);
                 context = this.harness.contextBuilder.build(sessionId, memoryContext);
                 logger.debug(`[AgentLoop] Context built — ${context.messages.length} messages, ${context.tools.length} tools`);
             } catch (err) {
@@ -66,6 +78,10 @@ export class AgentLoop {
                     messageId: randomUUID(),
                 });
                 logger.debug(`[AgentLoop] Assistant message stored — returning response`);
+
+                // Fire memory extraction in the background — do not block the response
+                this.saveMemoryAsync(sessionId);
+
                 return response.content;
             }
 
@@ -136,6 +152,42 @@ export class AgentLoop {
 
         // Max iterations reached without a final answer
         logger.error(`[AgentLoop] Reached max iterations (${this.maxIterations}) without resolution`);
+
+        // Still worth extracting — e.g. to learn a "gets stuck on X" procedural pattern
+        this.saveMemoryAsync(sessionId);
+
         throw new Error("Reached maximum loop iterations.");
+    }
+
+    // --- Fire-and-forget memory extraction; failures are logged, never thrown ---
+    private saveMemoryAsync(sessionId: string): void {
+        let trace: string;
+        try {
+            trace = this.serializeTrace(this.harness.messageManager.get(sessionId));
+        } catch (err) {
+            logger.error(`[AgentLoop] Failed to serialize trace for memory extraction: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+        }
+
+        this.harness.onTaskComplete(trace).catch((err) => {
+            logger.error(`[AgentLoop] Memory extraction failed: ${err instanceof Error ? err.message : String(err)}`, {
+                stack: err instanceof Error ? err.stack : undefined,
+            });
+        });
+    }
+
+    // --- Converts stored messages into a compact, LLM-readable execution trace ---
+    private serializeTrace(messages: any[]): string {
+        return messages
+            .map((m) => {
+                if (m.role === "tool") {
+                    return `[tool result] ${String(m.content).slice(0, 500)}`;
+                }
+                if (m.toolCalls?.length) {
+                    return `[assistant requested tools] ${m.toolCalls.map((t: any) => t.name).join(", ")}`;
+                }
+                return `[${m.role}] ${m.content}`;
+            })
+            .join("\n");
     }
 }
