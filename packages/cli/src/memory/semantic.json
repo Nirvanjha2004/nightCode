@@ -2,7 +2,11 @@
   "memory_location": "/episodic/",
   "user": {
     "name": "Nirvan",
-    "location": "IIITDM Kancheepuram"
+    "location": "IIITDM Kancheepuram",
+    "file_request": "delete temp.md",
+    "current_directory": "current directory or its subdirectories",
+    "file_search_method": "glob",
+    "delete_method": "delete"
   },
   "agent-harness": {
     "ts": "orchestrates core subsystems"
@@ -13,5 +17,8 @@
   "ContextBuilder": "builds prompt context for the LLM",
   "EpisodicMemoryManager": "stores/retrieves past event memories",
   "SemanticMemoryManager": "stores key-value facts",
-  "ProceduralMemoryManager": "stores rules and triggers"
+  "ProceduralMemoryManager": "stores rules and triggers",
+  "tool": {
+    "find_result": "no file found"
+  }
 }
