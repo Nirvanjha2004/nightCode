@@ -20,5 +20,29 @@
   "ProceduralMemoryManager": "stores rules and triggers",
   "tool": {
     "find_result": "no file found"
+  },
+  "terminal": {
+    "backend": "not set up"
+  },
+  "package": {
+    "manager": "npm, pip, yarn, etc.",
+    "json": "exists"
+  },
+  "package_manager": "npm, pip, yarn",
+  "package_file": "package.json, requirements.txt",
+  "terminal_backend": "not set up",
+  "user_access": "bash/terminal",
+  "terminal_access": "confirmed",
+  "python": {
+    "version": "3.12",
+    "executable": {
+      "path": "C:\\Users\\nirva\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+    }
+  },
+  "pip": {
+    "version": "25.0.1"
+  },
+  "npm": {
+    "version": "11.12.1"
   }
 }

@@ -21,6 +21,7 @@ import {
     find,
     renameTool,
     copy,
+    bash,
 } from "./agent/tools";
 import { EpisodicMemoryManager } from "./agent/memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./agent/memory/SemanticMemoryManager";
@@ -60,6 +61,7 @@ async function main() {
     toolRegistry.register(find);
     toolRegistry.register(renameTool);
     toolRegistry.register(copy);
+    toolRegistry.register(bash);
 
     const registeredNames = toolRegistry.list().map((t) => t.name);
     logger.info(`Built-in tools registered (${registeredNames.length}): ${registeredNames.join(", ")}`);

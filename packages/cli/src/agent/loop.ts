@@ -121,8 +121,14 @@ export class AgentLoop {
                             result = `Error: Tool "${toolCall.name}" is not registered.`;
                         } else {
                             // ── Human-in-the-loop: pause before destructive tools ──
+                            // Static flag (write/delete/...) OR dynamic check on the actual args
+                            // (bash command containing `rm -rf`, `git reset --hard`, ...).
                             let shouldSkip = false;
-                            if (tool.destructive && confirmHook) {
+                            const isDestructiveCall =
+                                tool.destructive === true ||
+                                (typeof tool.isDestructive === "function" &&
+                                    tool.isDestructive(toolCall.args));
+                            if (isDestructiveCall && confirmHook) {
                                 const summary = JSON.stringify(toolCall.args).slice(0, 200);
                                 const msg = `Destructive action: ${toolCall.name}(${summary})`;
                                 logger.info(`[AgentLoop] ⏸ Pausing for user confirmation on ${toolCall.name}`, {

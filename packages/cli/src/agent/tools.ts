@@ -8,10 +8,26 @@ import {
     rename,
     copyFile,
 } from "node:fs/promises";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 
 import { glob } from "glob";
 import type { Tool } from "./types";
 import { logger } from "../logger";
+import os from "node:os";
+
+const execAsync = promisify(exec);
+
+
+const shell =
+    os.platform() === "win32"
+        ? "powershell.exe"
+        : "bash";
+
+// Safety nets for shell execution: a hung command must not stall the agent loop
+// forever, and a huge log dump must not blow up memory.
+const SHELL_TIMEOUT_MS   = 120_000; // 2 min default; overridable via the `timeout` arg
+const SHELL_MAX_BUFFER   = 10 * 1024 * 1024; // 10MB of combined output
 
 function toolLogger(name: string) {
     return {
@@ -51,6 +67,78 @@ function assertNotMemoryPath(...paths: string[]): void {
 function coerceToString(value: unknown): string {
     if (typeof value === "string") return value;
     return JSON.stringify(value, null, 2);
+}
+
+// ── Destructive command detection (for the bash tool) ─────────────────────
+// If a shell command matches any of these patterns, the agent pauses and asks
+// the user to confirm before executing it. This is a heuristic, not a security
+// boundary — an unrecognized command can still be harmful, so the confirmation
+// prompt is the real safety net.
+// ponytail: regex heuristic — list is intentionally focused on irreversible ops
+// (deletes, overwrites, force pushes, disk/DB wipes); if it grows long it should
+// move to a curated data file rather than inline code.
+const DESTRUCTIVE_PATTERNS: RegExp[] = [
+    /\brm\b/,                                            // rm anything (single file, -r, -rf, -f ...)
+    /\brmdir\b/,                                         // remove directory
+    /\bunlink\b/,
+    /\bmv\b/,                                            // can silently overwrite the destination
+    /\bcp\s+-[a-zA-Z]*f/i,                               // cp -f overwrites
+    /\bshred\b/, /\bwipe\b/,
+    /\bdd\b.*\bof=\/dev\//,                             // raw write to a device
+    /\b(?:mkfs(?:\.[a-z0-9]+)?|format|fdisk|parted)\b/,
+    /\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f[a-z]*|checkout\s+--|push\s+--force|push\s+-f|branch\s+-[dD]|stash\s+drop|tag\s+-d)/,
+    /\b(?:drop|truncate)\s+(?:database|table|schema)\b/i,
+    /\bdelete\s+from\b/i,                                // unqualified DELETE wipes rows
+    /\bkill\s+-9\b/i, /\bpkill\b/i, /\bkillall\b/i,
+    /\b(?:shutdown|reboot|poweroff|halt)\b/i,
+    /\binit\s+[06]\b/i,
+    /\bsystemctl\s+(?:stop|disable|mask)\b/i,
+    /\b(?:curl|wget)\b.*\|\s*(?:ba)?sh\b/i,             // pipe-to-shell execution
+    /:\s*\(\s*\)\s*\{\s*:\|:&\s*\};:/,             // fork bomb
+    /\bchmod\s+(-[a-zA-Z]*R)?\s*777\b/i,                // world-writable permissions
+    /\bchown\s+-R\b/i,
+    /\bcrontab\s+-r\b/i,
+    /\bsed\s+-i/i,                                        // in-place file modification
+    /\bfind\b.*\s-delete\b/,                             // find -delete
+    /\bdocker\s+(?:rm|rmi|system\s+prune|volume\s+rm|network\s+rm|image\s+rm)\b/i,
+    /\bnpm\s+(?:unpublish|cache\s+clean\s+--force)\b/i,
+];
+
+export function isDestructiveCommand(command: string): boolean {
+    if (!command) return false;
+    return DESTRUCTIVE_PATTERNS.some((re) => re.test(command));
+}
+
+// Formats a shell run as a compact, LLM-readable result: command, output, exit code.
+// Output is capped so a single huge log can't overflow the LLM context window
+// (the context manager only compresses messages outside the preserved last 15).
+// Keeps head + tail: test failures and conclusions usually live at the END of the
+// output, so a plain head-truncation would hide exactly what the model needs.
+const MAX_RESULT_CHARS = 12_000;
+const TAIL_KEEP_CHARS  = 3_000;
+
+export function truncate(text: string, max: number): string {
+    if (text.length <= max) return text;
+    const tail = text.slice(-TAIL_KEEP_CHARS);
+    return `${text.slice(0, max - TAIL_KEEP_CHARS)}\n... (truncated, ${text.length} chars total) ...\n${tail}`;
+}
+
+function formatShellResult(
+    command: string,
+    stdout: string,
+    stderr: string,
+    exitCode: number,
+    durationMs: number,
+    signal?: string | null
+): string {
+    const parts: string[] = [`$ ${command}`];
+    const out = truncate((stdout ?? "").trimEnd(), MAX_RESULT_CHARS);
+    const err = truncate((stderr ?? "").trimEnd(), MAX_RESULT_CHARS);
+    if (out) parts.push(`--- stdout ---\n${out}`);
+    if (err) parts.push(`--- stderr ---\n${err}`);
+    if (!out && !err) parts.push("(no output)");
+    parts.push(`exit code: ${exitCode}${signal ? ` (killed by ${signal})` : ""} — took ${durationMs}ms`);
+    return parts.join("\n");
 }
 
 export const read: Tool = {
@@ -403,6 +491,78 @@ export const renameTool: Tool = {
         } catch (err) {
             log.error(err);
             throw err;
+        }
+    },
+};
+
+export const bash: Tool = {
+    name: "bash",
+    description:
+        "Run a shell command in a bash subprocess and return its output. " +
+        "Use this for anything command-line: running tests (e.g. \"pytest tests/ -q\"), builds, linters, " +
+        "package installs, git operations, or any other command the user asks you to run. " +
+        "The result includes captured stdout, stderr, and the exit code, so a failing command is " +
+        "reported back to you (not an error) and you can react: fix the code, re-run the test, etc. " +
+        "Commands run in the project's working directory. " +
+        "WARNING: commands that delete or overwrite things (rm, mv, git reset --hard, drop table, ...) " +
+        "trigger a user confirmation prompt. Do NOT try to work around that prompt, and do not run " +
+        "destructive commands unless the user explicitly asked for them. " +
+        "Do not run the same command repeatedly in a tight loop — run once, read the output, then decide. " +
+        "Note: shell commands cannot access the memory/ directory; it is managed automatically by the system.",
+    parameters: {
+        type: "object",
+        properties: {
+            command: { type: "string", description: "The bash command to execute, e.g. \"pytest tests/ -q\"" },
+            timeout: { type: "number", description: "Optional timeout in milliseconds (default 120000). Increase for long-running commands like full test suites." },
+        },
+        required: ["command"],
+    },
+    isDestructive: (args) => isDestructiveCommand(coerceToString((args as any).command)),
+    exec: async (args) => {
+        const log = toolLogger("bash");
+        log.start(args);
+        const start = Date.now();
+        const command = coerceToString((args as any).command);
+        if (!command) {
+            return "$ bash\nError: no command provided.";
+        }
+        // Trust boundary: the model supplies `timeout`. 0/-1/NaN/Infinity would all
+        // silently disable the safety net in Node's exec, so sanitize + clamp.
+        const t = (args as any).timeout;
+        const timeout =
+            typeof t === "number" && Number.isFinite(t) && t > 0
+                ? Math.min(t, 10 * 60_000)
+                : SHELL_TIMEOUT_MS;
+
+        try {
+            assertNotMemoryPath(command);
+            const { stdout, stderr } = await execAsync(command, {
+                shell,
+                timeout,
+                maxBuffer: SHELL_MAX_BUFFER,
+                windowsHide: true,
+            });
+            const result = formatShellResult(command, stdout, stderr, 0, Date.now() - start);
+            log.success(`exit 0 in ${Date.now() - start}ms`, Date.now() - start);
+            return result;
+        } catch (err) {
+            // Non-zero exit is a RESULT, not an exception — the model needs the
+            // output to decide the next step. Same for timeouts/killed processes.
+            const e = err as { code?: number; signal?: string; stdout?: string; stderr?: string; message?: string };
+            const exitCode = typeof e.code === "number" ? e.code : 1;
+            // Command-not-found (ENOENT) can reject with empty stderr but a useful message.
+            const stderrRaw =
+                typeof e.stderr === "string" && e.stderr.length > 0 ? e.stderr : (e.message ?? "");
+            const result = formatShellResult(
+                command,
+                typeof e.stdout === "string" ? e.stdout : "",
+                stderrRaw,
+                exitCode,
+                Date.now() - start,
+                e.signal
+            );
+            log.success(`exit ${exitCode} in ${Date.now() - start}ms`, Date.now() - start);
+            return result;
         }
     },
 };

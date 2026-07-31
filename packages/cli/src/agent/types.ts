@@ -6,6 +6,12 @@ export type Tool = {
     description: string;
     /** If true, the agent will pause and ask the user to confirm before executing this tool. */
     destructive?: boolean;
+    /**
+     * Dynamic destructive check — given the actual call arguments, decide whether this
+     * particular invocation needs user confirmation (e.g. a bash command containing `rm -rf`).
+     * Takes precedence over the static `destructive` flag when both are present.
+     */
+    isDestructive?: (args: Record<string, unknown>) => boolean;
     parameters: {
         type: "object";
         properties: Record<string, {
