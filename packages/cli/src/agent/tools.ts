@@ -8,7 +8,7 @@ import {
     rename,
     copyFile,
 } from "node:fs/promises";
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 import { glob } from "glob";
@@ -454,6 +454,117 @@ export const find: Tool = {
             const files = await glob(`**/${name}`, { cwd: root });
             log.success(`${files.length} matches`, Date.now() - start);
             return files.join("\n");
+        } catch (err) {
+            log.error(err);
+            throw err;
+        }
+    },
+};
+
+// ── grep (ripgrep) ────────────────────────────────────────────────────────
+// Builds the ripgrep argv from tool args. Pure function so it can be
+// unit-checked without spawning a process.
+// ponytail: arg list is hand-rolled for the handful of options the model needs;
+// if more flags (context lines, fixed strings, ...) are wanted, extend the map here.
+export function buildRipgrepArgs(args: {
+    pattern: string;
+    path?: string;
+    glob?: string;
+    ignoreCase?: boolean;
+    maxResults?: number;
+}): string[] {
+    const rgArgs = [
+        "--line-number",
+        "--no-heading",       // one `path:line:content` per match, no grouping headers
+        "--color", "never",
+        // The memory/ directory is off-limits to tools — never surface its contents.
+        "-g", "!**/memory/**",
+    ];
+    if (args.ignoreCase) rgArgs.push("-i");
+    if (args.glob) rgArgs.push("-g", String(args.glob));
+    const m = args.maxResults;
+    if (typeof m === "number" && Number.isFinite(m) && m > 0) {
+        rgArgs.push("-m", String(Math.floor(Math.min(m, 1000)))); // cap per-file matches
+    }
+    // `--` ends flag parsing so a pattern (or path) starting with "-" is treated as text
+    rgArgs.push("--", String(args.pattern));
+    if (args.path) rgArgs.push(String(args.path));
+    return rgArgs;
+}
+
+// Runs a command with an argv array and NO shell — quoting/escaping surprises
+// (spaces, $, backticks, Windows/powershell rules) simply can't happen. Captures
+// combined output with a hard size cap and kills on timeout, mirroring the bash tool.
+function runProcess(
+    cmd: string,
+    args: string[],
+    timeoutMs: number
+): Promise<{ code: number; stdout: string; stderr: string; signal: string | null }> {
+    return new Promise((resolve) => {
+        const child = spawn(cmd, args, { windowsHide: true });
+        let stdout = "";
+        let stderr = "";
+        let finished = false;
+        const killTimer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+        const finish = (code: number, signal: string | null) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(killTimer);
+            resolve({ code, stdout, stderr, signal });
+        };
+        child.stdout.on("data", (chunk: Buffer) => {
+            stdout += chunk.toString();
+            if (stdout.length > SHELL_MAX_BUFFER) child.kill("SIGKILL");
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+            stderr += chunk.toString();
+        });
+        child.on("error", (err) => {
+            stderr += `failed to spawn ${cmd}: ${err.message}`;
+            finish(127, null);
+        });
+        child.on("close", (code, signal) => finish(code ?? 1, signal));
+    });
+}
+
+export const grep: Tool = {
+    name: "grep",
+    description:
+        "Search the CONTENTS of files using ripgrep (rg), the fast recursive grep. " +
+        "Use this to find every file and line matching a regex pattern — all call sites of a " +
+        "function, all TODO/FIXME comments, or where a string appears anywhere in the project. " +
+        "Returns one `path:line:content` per match. The pattern is a regular expression in " +
+        "ripgrep syntax. By default it searches the current directory recursively and honors " +
+        ".gitignore; pass `path` to limit the search to a specific file or directory, and `glob` " +
+        "to restrict which files are searched (e.g. \"*.ts\", \"!*.test.ts\"). When nothing matches, " +
+        "the result says \"exit code: 1\" — that is ripgrep's normal empty-result convention, not an " +
+        "error. For finding files by NAME rather than content, use `find` or `glob` instead. " +
+        "Note: the memory/ directory is always excluded from search results.",
+    parameters: {
+        type: "object",
+        properties: {
+            pattern: { type: "string", description: "Regex pattern to search for, e.g. \"createUser\" or \"TODO|FIXME\"" },
+            path: { type: "string", description: "Optional file or directory to search instead of the whole project, e.g. \"src\" or \"package.json\"" },
+            glob: { type: "string", description: "Optional glob filter for which files to search, e.g. \"*.ts\" or \"!*.test.ts\"" },
+            ignoreCase: { type: "boolean", description: "If true, match case-insensitively" },
+            maxResults: { type: "number", description: "Optional cap on matches per file (default: unlimited)" },
+        },
+        required: ["pattern"],
+    },
+    exec: async (args) => {
+        const log = toolLogger("grep");
+        log.start(args);
+        const start = Date.now();
+        const pattern = coerceToString((args as any).pattern);
+        if (!pattern) {
+            return "Error: no pattern provided.";
+        }
+        const rgArgs = buildRipgrepArgs(args as any);
+        try {
+            const { code, stdout, stderr, signal } = await runProcess("rg", rgArgs, SHELL_TIMEOUT_MS);
+            const result = formatShellResult(`rg ${rgArgs.join(" ")}`, stdout, stderr, code, Date.now() - start, signal);
+            log.success(`exit ${code} in ${Date.now() - start}ms`, Date.now() - start);
+            return result;
         } catch (err) {
             log.error(err);
             throw err;

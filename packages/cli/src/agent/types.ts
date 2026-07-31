@@ -69,6 +69,14 @@ export type FindArgs = {
     name: string;
 };
 
+export type GrepArgs = {
+    pattern: string;
+    path?: string;
+    glob?: string;
+    ignoreCase?: boolean;
+    maxResults?: number;
+};
+
 export type RenameArgs = {
     from: string;
     to: string;

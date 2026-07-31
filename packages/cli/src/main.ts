@@ -8,7 +8,7 @@ import { GroqClient } from "./llm-client/groq-client";
 import { TerminalUI } from "./terminal";
 import { logger } from "./logger";
 
-//// Tools — all 11, not just 3
+//// Tools — all 12, not just 3
 import {
     read,
     write,
@@ -19,6 +19,7 @@ import {
     ls,
     globTool,
     find,
+    grep,
     renameTool,
     copy,
     bash,
@@ -59,6 +60,7 @@ async function main() {
     toolRegistry.register(ls);
     toolRegistry.register(globTool);
     toolRegistry.register(find);
+    toolRegistry.register(grep);
     toolRegistry.register(renameTool);
     toolRegistry.register(copy);
     toolRegistry.register(bash);

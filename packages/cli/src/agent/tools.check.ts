@@ -1,7 +1,11 @@
-// tools.check.ts — tiny assert-based self-check for the bash tool's detection logic.
+// tools.check.ts — tiny assert-based self-check for tool internals.
 // Run with: bun packages/cli/src/agent/tools.check.ts
 import assert from "node:assert/strict";
-import { isDestructiveCommand, truncate } from "./tools";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isDestructiveCommand, truncate, buildRipgrepArgs, grep } from "./tools";
 
 // Commands that MUST trigger the confirmation prompt.
 const destructive = [
@@ -54,6 +58,48 @@ for (const cmd of destructive) {
 }
 for (const cmd of safe) {
     assert.ok(!isDestructiveCommand(cmd), `expected safe: "${cmd}"`);
+}
+
+// ── grep arg building ────────────────────────────────────────────────────
+const base = buildRipgrepArgs({ pattern: "foo" });
+assert.ok(base.includes("--line-number") && base.includes("--no-heading"), "default flags present");
+assert.ok(base.includes("!**/memory/**"), "memory/ dir must always be excluded");
+assert.equal(base[base.length - 2], "--", "`--` terminator must precede the pattern");
+assert.equal(base[base.length - 1], "foo", "pattern last when no path");
+
+const full = buildRipgrepArgs({ pattern: "TODO", path: "src", glob: "*.ts", ignoreCase: true, maxResults: 5 });
+assert.ok(full.includes("-i"), "ignoreCase adds -i");
+assert.ok(full.includes("-g") && full.includes("*.ts"), "glob adds -g <glob>");
+assert.ok(full.includes("-m") && full.includes("5"), "maxResults adds -m <n>");
+assert.equal(full[full.length - 1], "src", "path last");
+
+const clamped = buildRipgrepArgs({ pattern: "x", maxResults: 99999 });
+assert.ok(clamped.includes("1000"), "maxResults clamped to 1000");
+assert.deepEqual(
+    buildRipgrepArgs({ pattern: "p", ignoreCase: false, maxResults: -3 }),
+    buildRipgrepArgs({ pattern: "p" }),
+    "falsey ignoreCase / bad maxResults are ignored"
+);
+
+// ── grep integration (requires ripgrep on PATH; skipped otherwise) ───────
+if (spawnSync("rg", ["--version"]).status === 0) {
+    const dir = mkdtempSync(join(tmpdir(), "grep-check-"));
+    try {
+        writeFileSync(join(dir, "a.ts"), "const x = 1;\n// TODO: fix this\n");
+        writeFileSync(join(dir, "b.md"), "no match here\n");
+
+        const hit = String(await grep.exec({ pattern: "TODO", path: dir }));
+        assert.ok(hit.includes("a.ts:2"), `match should be path:line:content, got: ${hit}`);
+        assert.ok(!hit.includes("b.md"), "non-matching file must not appear");
+
+        const miss = String(await grep.exec({ pattern: "zzz-definitely-nope", path: dir }));
+        assert.ok(miss.includes("exit code: 1"), "no match → exit code 1 (rg convention)");
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+    console.log("grep integration verified (temp dir cleaned up).");
+} else {
+    console.log("Skipping grep integration — ripgrep not on PATH.");
 }
 
 // Head+tail truncation must keep the tail (where failures live) with a marker.
