@@ -163,12 +163,25 @@ export class AgentLoop {
                         result = `Error: ${errMsg}`;
                     }
 
-                    // Store tool result
+                    // AgentLoop.ts me, assistant tool-call message store karte waqt
+                    function trimToolCallArgsForHistory(toolCalls: ToolCall[]): ToolCall[] {
+                        return toolCalls.map((tc) => {
+                            const trimmedArgs = { ...tc.args };
+                            for (const key of Object.keys(trimmedArgs)) {
+                                const val = trimmedArgs[key];
+                                if (typeof val === "string" && val.length > 300) {
+                                    trimmedArgs[key] = val.slice(0, 300) + `... [truncated, ${val.length - 300} more chars — full content was already written to disk]`;
+                                }
+                            }
+                            return { ...tc, args: trimmedArgs };
+                        });
+                    }
+
                     this.harness.messageManager.add({
                         sessionId,
-                        role: "tool",
-                        content: result,
-                        toolCallId: toolCall.id,
+                        role: "assistant",
+                        content: "",
+                        toolCalls: trimToolCallArgsForHistory(toolCalls), // ✅ ab history me sirf 300 chars jaayenge, poora 4000 nahi
                         createdAt: new Date(),
                         messageId: randomUUID(),
                     });

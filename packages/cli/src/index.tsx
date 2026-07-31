@@ -7,6 +7,9 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type { AgentLoop } from "../src/agent/loop";
 import type { ConfirmHook } from "./agent/types";
 import { logger } from "./logger";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
+
+const tracer = trace.getTracer("nightCode");
 
 // Display-only — agent context lives in backend MessageManager, not here
 type DisplayMessage = {
@@ -244,9 +247,24 @@ export function App({ sessionId, agentLoop }: Props) {
         setLoading(true);
         try {
             const confirmHook = buildConfirmHook();
-            const response = await agentLoop.execute(sessionId, trimmed, confirmHook);
-            logger.info(`[UI] Agent response received (len=${response.length})`);
-            push("assistant", response);
+            await tracer.startActiveSpan("agent.execute", async (span) => {
+                try {
+                    span.setAttribute("session.id", sessionId);
+                    const response = await agentLoop.execute(sessionId, trimmed, confirmHook);
+                    span.setAttribute("response.length", response.length);
+                    logger.info(`[UI] Agent response received (len=${response.length})`);
+                    push("assistant", response);
+                } catch (err) {
+                    span.setStatus({
+                        code: SpanStatusCode.ERROR,
+                        message: err instanceof Error ? err.message : String(err),
+                    });
+
+                    throw err;
+                } finally {
+                    span.end();
+                }
+            });
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             logger.error(`[UI] Agent execution failed: ${errMsg}`, {
