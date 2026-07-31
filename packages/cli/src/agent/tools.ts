@@ -711,3 +711,64 @@ export const copy: Tool = {
         }
     },
 };
+
+// ── todoWrite ─────────────────────────────────────────────────────────────
+// Stateless todo tracker: renders the checklist as the tool result, which the
+// loop stores as a "tool" message — so the model sees its own plan in the
+// conversation on later turns. Re-call with the FULL updated list on progress.
+const TODO_MARKERS: Record<string, string> = {
+    pending: "[ ]",
+    in_progress: "[~]",
+    completed: "[x]",
+};
+
+export function renderTodoList(todos: Array<{ content: unknown; status?: unknown }>): string {
+    if (!todos.length) return "Todo list cleared.";
+    return todos
+        .map((t, i) => {
+            const status =
+                t.status === "in_progress" || t.status === "completed" ? String(t.status) : "pending";
+            return `${i + 1}. ${TODO_MARKERS[status]} ${coerceToString(t.content)}`;
+        })
+        .join("\n");
+}
+
+export const todoWrite: Tool = {
+    name: "todoWrite",
+    description:
+        "Record the plan for a multi-step task as a checklist, and keep it updated as work progresses. " +
+        "Call this at the START of any task with multiple steps, and re-call it whenever a step's status " +
+        "changes — always pass the FULL updated list, never a diff. Each item has `content` (what to do) " +
+        "and `status`, one of \"pending\", \"in_progress\", or \"completed\". The rendered checklist is " +
+        "returned to you in the conversation, so you can see the current plan on later turns. Pass an " +
+        "empty list to clear the plan. Keep items short and actionable.",
+    parameters: {
+        type: "object",
+        properties: {
+            todos: {
+                type: "array",
+                description:
+                    "The full plan as an array of objects, each shaped like { content: string, status: \"pending\" | \"in_progress\" | \"completed\" }",
+                items: {
+                    type: "object",
+                    properties: {
+                        content: { type: "string", description: "What to do" },
+                        status: { type: "string", enum: ["pending", "in_progress", "completed"] },
+                    },
+                    required: ["content", "status"],
+                },
+            },
+        },
+        required: ["todos"],
+    },
+    exec: async (args) => {
+        const log = toolLogger("todoWrite");
+        log.start(args);
+        const start = Date.now();
+        const raw = (args as any).todos;
+        const todos = Array.isArray(raw) ? raw : [];
+        const result = renderTodoList(todos);
+        log.success(`${todos.length} todos rendered`, Date.now() - start);
+        return result;
+    },
+};

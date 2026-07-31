@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isDestructiveCommand, truncate, buildRipgrepArgs, grep } from "./tools";
+import { isDestructiveCommand, truncate, buildRipgrepArgs, grep, renderTodoList, todoWrite } from "./tools";
 
 // Commands that MUST trigger the confirmation prompt.
 const destructive = [
@@ -101,6 +101,32 @@ if (spawnSync("rg", ["--version"]).status === 0) {
 } else {
     console.log("Skipping grep integration — ripgrep not on PATH.");
 }
+
+// ── todoWrite rendering ───────────────────────────────────────────────────
+const plan = renderTodoList([
+    { content: "first", status: "completed" },
+    { content: "second", status: "in_progress" },
+    { content: "third", status: "pending" },
+]);
+assert.ok(plan.includes("1. [x] first"), "completed renders [x]");
+assert.ok(plan.includes("2. [~] second"), "in_progress renders [~]");
+assert.ok(plan.includes("3. [ ] third"), "pending renders [ ]");
+assert.equal(
+    renderTodoList([{ content: "weird", status: "done" }]),
+    "1. [ ] weird",
+    "unknown status falls back to pending"
+);
+assert.equal(renderTodoList([]), "Todo list cleared.", "empty list clears plan");
+assert.equal(
+    String(await todoWrite.exec({})),
+    "Todo list cleared.",
+    "missing/non-array todos arg is tolerated"
+);
+assert.equal(
+    String(await todoWrite.exec({ todos: [{ content: "x", status: "completed" }] })),
+    "1. [x] x",
+    "exec renders the checklist"
+);
 
 // Head+tail truncation must keep the tail (where failures live) with a marker.
 const long = "h".repeat(9_500) + "m".repeat(4_000) + "T".repeat(6_500); // 20_000 chars

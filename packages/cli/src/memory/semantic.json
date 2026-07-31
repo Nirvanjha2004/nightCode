@@ -44,5 +44,12 @@
   },
   "npm": {
     "version": "11.12.1"
+  },
+  "project": {
+    "path": "llm-client"
+  },
+  "environment": {
+    "tool": "bash",
+    "config": "typescript"
   }
 }

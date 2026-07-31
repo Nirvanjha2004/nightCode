@@ -8,7 +8,7 @@ import { GroqClient } from "./llm-client/groq-client";
 import { TerminalUI } from "./terminal";
 import { logger } from "./logger";
 
-//// Tools — all 12, not just 3
+//// Tools — all 14, not just 3
 import {
     read,
     write,
@@ -23,6 +23,7 @@ import {
     renameTool,
     copy,
     bash,
+    todoWrite,
 } from "./agent/tools";
 import { EpisodicMemoryManager } from "./agent/memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./agent/memory/SemanticMemoryManager";
@@ -64,6 +65,7 @@ async function main() {
     toolRegistry.register(renameTool);
     toolRegistry.register(copy);
     toolRegistry.register(bash);
+    toolRegistry.register(todoWrite);
 
     const registeredNames = toolRegistry.list().map((t) => t.name);
     logger.info(`Built-in tools registered (${registeredNames.length}): ${registeredNames.join(", ")}`);

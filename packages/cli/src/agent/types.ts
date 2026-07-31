@@ -17,6 +17,8 @@ export type Tool = {
         properties: Record<string, {
             type: string;
             description?: string;
+            /** JSON-schema fields for nested shapes (e.g. array `items`), passed through to the LLM. */
+            items?: Record<string, unknown>;
         }>;
         required?: string[];
     };
@@ -75,6 +77,15 @@ export type GrepArgs = {
     glob?: string;
     ignoreCase?: boolean;
     maxResults?: number;
+};
+
+export type TodoItem = {
+    content: string;
+    status: "pending" | "in_progress" | "completed";
+};
+
+export type TodoWriteArgs = {
+    todos: TodoItem[];
 };
 
 export type RenameArgs = {

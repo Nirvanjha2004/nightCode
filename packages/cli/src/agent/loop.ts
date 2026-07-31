@@ -34,7 +34,6 @@ export class AgentLoop {
             logger.error(`[AgentLoop] Failed to build memory context: ${err instanceof Error ? err.message : String(err)}`, {
                 stack: err instanceof Error ? err.stack : undefined,
             });
-            // non-fatal — proceed without memory context rather than blocking the whole task
             memoryContext = "";
         }
 

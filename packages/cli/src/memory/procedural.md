@@ -11,3 +11,6 @@
 11. [pip install command] Always check if a package is already installed before installing it
 12. [pip install command followed by pip uninstall command] Uninstall a package immediately after installing it if not needed
 13. [pip uninstall command] Use the -y flag with pip uninstall to automatically confirm uninstallation
+14. [editing a file] always read the file before editing
+15. [writing a file] verify the file contents before writing
+16. [using a tool that requires installation] install required tools before using them
