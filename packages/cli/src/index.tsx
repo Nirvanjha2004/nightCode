@@ -1,16 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Header } from "../components/header";
-import { InputBar } from "../components/input-bar"; 
+import { InputBar } from "../components/input-bar";
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
+import "./telemetry";
 import type { AgentLoop } from "../src/agent/loop";
 import type { ConfirmHook } from "./agent/types";
 import { logger } from "./logger";
-import { SpanStatusCode, trace } from "@opentelemetry/api";
-
-const tracer = trace.getTracer("nightCode");
-
 // Display-only — agent context lives in backend MessageManager, not here
 type DisplayMessage = {
     id: string;
@@ -25,28 +22,28 @@ type Props = {
 
 // ── Color palette (Catppuccin Mocha inspired) ─────────────────────────────────
 const C = {
-    bg:       "#0D0D12",
+    bg: "#0D0D12",
     surface0: "#13131A",
     surface1: "#1A1A24",
     surface2: "#222233",
     overlay0: "#2A2A3A",
     overlay1: "#3A3A4A",
     subtitle: "#6B6B7B",
-    text:     "#CDD6F4",
-    blue:     "#89B4FA",
-    green:    "#A6E3A1",
-    red:      "#F38BA8",
-    yellow:   "#F9E2AF",
-    mauve:    "#CBA6F7",
-    peach:    "#FAB387",
-    teal:     "#94E2D5",
+    text: "#CDD6F4",
+    blue: "#89B4FA",
+    green: "#A6E3A1",
+    red: "#F38BA8",
+    yellow: "#F9E2AF",
+    mauve: "#CBA6F7",
+    peach: "#FAB387",
+    teal: "#94E2D5",
 };
 
 // ── Role label config ─────────────────────────────────────────────────────────
 const ROLE_CONFIG: Record<DisplayMessage["role"], { label: string; fg: string; bg: string; border: string }> = {
-    user:      { label: "You",       fg: C.blue,   bg: "#15152A", border: C.blue },
-    assistant: { label: "NightCode", fg: C.green,  bg: "#15251A", border: C.green },
-    error:     { label: "Error",     fg: C.red,    bg: "#2A1515", border: C.red },
+    user: { label: "You", fg: C.blue, bg: "#15152A", border: C.blue },
+    assistant: { label: "NightCode", fg: C.green, bg: "#15251A", border: C.green },
+    error: { label: "Error", fg: C.red, bg: "#2A1515", border: C.red },
 };
 
 // ── Confirmation dialog ────────────────────────────────────────────────────────
@@ -189,7 +186,7 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
 // ── Main App ───────────────────────────────────────────────────────────────────
 export function App({ sessionId, agentLoop }: Props) {
     const [messages, setMessages] = useState<DisplayMessage[]>([]);
-    const [loading, setLoading]   = useState(false);
+    const [loading, setLoading] = useState(false);
     const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
     const pendingRef = useRef(pendingConfirm);
     pendingRef.current = pendingConfirm;
@@ -247,24 +244,9 @@ export function App({ sessionId, agentLoop }: Props) {
         setLoading(true);
         try {
             const confirmHook = buildConfirmHook();
-            await tracer.startActiveSpan("agent.execute", async (span) => {
-                try {
-                    span.setAttribute("session.id", sessionId);
-                    const response = await agentLoop.execute(sessionId, trimmed, confirmHook);
-                    span.setAttribute("response.length", response.length);
-                    logger.info(`[UI] Agent response received (len=${response.length})`);
-                    push("assistant", response);
-                } catch (err) {
-                    span.setStatus({
-                        code: SpanStatusCode.ERROR,
-                        message: err instanceof Error ? err.message : String(err),
-                    });
-
-                    throw err;
-                } finally {
-                    span.end();
-                }
-            });
+            const response = await agentLoop.execute(sessionId, trimmed, confirmHook);
+            logger.info(`[UI] Agent response received (len=${response.length})`);
+            push("assistant", response);
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             logger.error(`[UI] Agent execution failed: ${errMsg}`, {

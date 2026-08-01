@@ -51,5 +51,8 @@
   "environment": {
     "tool": "bash",
     "config": "typescript"
+  },
+  "assistant": {
+    "response": "4"
   }
 }

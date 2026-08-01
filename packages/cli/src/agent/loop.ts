@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { AgentHarness } from "./agent-harness";
 import type { ConfirmHook, ToolCall } from "./types";
 import { logger } from "../logger";
+import { SpanStatusCode } from "@opentelemetry/api";
+import { tracer } from "../telemetry";
 
 export class AgentLoop {
     constructor(
@@ -11,192 +13,261 @@ export class AgentLoop {
     ) { }
 
     async execute(sessionId: string, userInput: string, confirmHook?: ConfirmHook): Promise<string> {
-        logger.info(`[AgentLoop] Starting execution — session=${sessionId}`, {
-            userInput: userInput.slice(0, 200),
-        });
-
-        // Step 1: Store user message
-        this.harness.messageManager.add({
-            sessionId,
-            role: "user",
-            content: userInput,
-            createdAt: new Date(),
-            messageId: randomUUID(),
-        });
-        logger.debug(`[AgentLoop] User message stored (len=${userInput.length})`);
-
-        // Step 1.5: Build memory context ONCE per user turn (not per iteration)
-        let memoryContext = "";
-        try {
-            memoryContext = await this.harness.buildMemoryContext(userInput);
-            logger.debug(`[AgentLoop] Memory context built (len=${memoryContext.length})`);
-        } catch (err) {
-            logger.error(`[AgentLoop] Failed to build memory context: ${err instanceof Error ? err.message : String(err)}`, {
-                stack: err instanceof Error ? err.stack : undefined,
-            });
-            memoryContext = "";
-        }
-
-        for (let iter = 1; iter <= this.maxIterations; iter++) {
-            logger.info(`[AgentLoop] Iteration ${iter}/${this.maxIterations}`);
-
-            // Step 2: Build context
-            let context;
+        return tracer.startActiveSpan("agent.execute", async (span) => {
             try {
-                context = await this.harness.contextBuilder.build(sessionId, memoryContext);
-                logger.debug(`[AgentLoop] Context built — ${context.messages.length} messages, ${context.tools.length} tools`);
-            } catch (err) {
-                logger.error(`[AgentLoop] Failed to build context: ${err instanceof Error ? err.message : String(err)}`, {
-                    stack: err instanceof Error ? err.stack : undefined,
+                span.setAttribute("session.id", sessionId);
+                span.setAttribute("user.input.length", userInput.length);
+
+                logger.info(`[AgentLoop] Starting execution — session=${sessionId}`, {
+                    userInput: userInput.slice(0, 200),
                 });
-                throw err;
-            }
 
-            // Step 3: LLM call
-            let response;
-            try {
-                logger.info(`[AgentLoop] Sending to LLM (model=${context.model})`);
-                response = await this.llm.chat(context);
-                logger.debug(`[AgentLoop] LLM response type: ${response.type}`);
-            } catch (err) {
-                logger.error(`[AgentLoop] LLM call failed: ${err instanceof Error ? err.message : String(err)}`, {
-                    stack: err instanceof Error ? err.stack : undefined,
-                });
-                throw err;
-            }
-
-            // Exit condition: natural text answer
-            if (response.type === "text") {
-                logger.info(`[AgentLoop] LLM returned text response (len=${response.content.length})`);
-
+                // Step 1: Store user message
                 this.harness.messageManager.add({
                     sessionId,
-                    role: "assistant",
-                    content: response.content,
+                    role: "user",
+                    content: userInput,
                     createdAt: new Date(),
                     messageId: randomUUID(),
                 });
-                logger.debug(`[AgentLoop] Assistant message stored — returning response`);
+                logger.debug(`[AgentLoop] User message stored (len=${userInput.length})`);
 
-                // Fire memory extraction in the background — do not block the response
-                this.saveMemoryAsync(sessionId);
-
-                return response.content;
-            }
-
-            // Step 4: Tool call flow
-            if (response.type === "tool_calls") {
-                logger.info(`[AgentLoop] LLM requested ${JSON.stringify(response)} for tool call(s)`);
-
-                const toolCalls: ToolCall[] = response.toolCalls;
-                logger.info(`[AgentLoop] LLM requested ${toolCalls.length} tool call(s)`);
-
-                // Log each tool call details
-                for (const tc of toolCalls) {
-                    logger.info(`[AgentLoop]   → Tool: ${tc.name} | id: ${tc.id}`, { args: tc.args });
+                // Step 1.5: Build memory context ONCE per user turn (not per iteration)
+                let memoryContext = "";
+                try {
+                    memoryContext = await this.harness.buildMemoryContext(userInput);
+                    logger.debug(`[AgentLoop] Memory context built (len=${memoryContext.length})`);
+                } catch (err) {
+                    logger.error(`[AgentLoop] Failed to build memory context: ${err instanceof Error ? err.message : String(err)}`, {
+                        stack: err instanceof Error ? err.stack : undefined,
+                    });
+                    memoryContext = "";
                 }
 
-                // Assistant intent — toolCalls is the plural array field
-                this.harness.messageManager.add({
-                    sessionId,
-                    role: "assistant",
-                    content: "",
-                    toolCalls: toolCalls,
-                    createdAt: new Date(),
-                    messageId: randomUUID(),
-                });
-                logger.debug(`[AgentLoop] Assistant tool-call message stored`);
+                for (let iter = 1; iter <= this.maxIterations; iter++) {
+                    logger.info(`[AgentLoop] Iteration ${iter}/${this.maxIterations}`);
 
-                // Execute each tool call
-                for (const toolCall of toolCalls) {
-                    let result = "";
-                    const startTime = Date.now();
+                    const iteration = await tracer.startActiveSpan(
+                        `iteration_${iter}`,
+                        async (iterSpan): Promise<{ done: boolean; content: string }> => {
+                            try {
+                                // Step 2: Build context
+                                const context = await tracer.startActiveSpan(
+                                    "context.build",
+                                    async (ctxSpan) => {
+                                        try {
+                                            const built = await this.harness.contextBuilder.build(sessionId, memoryContext);
+                                            ctxSpan.setAttribute("context.messages", built.messages.length);
+                                            ctxSpan.setAttribute("context.tools", built.tools.length);
+                                            logger.debug(`[AgentLoop] Context built — ${built.messages.length} messages, ${built.tools.length} tools`);
+                                            return built;
+                                        } catch (err) {
+                                            logger.error(`[AgentLoop] Failed to build context: ${err instanceof Error ? err.message : String(err)}`, {
+                                                stack: err instanceof Error ? err.stack : undefined,
+                                            });
+                                            ctxSpan.recordException(err as Error);
+                                            ctxSpan.setStatus({ code: SpanStatusCode.ERROR });
+                                            throw err;
+                                        } finally {
+                                            ctxSpan.end();
+                                        }
+                                    }
+                                );
 
-                    try {
-                        const tool = this.harness.toolRegistry.get(toolCall.name);
+                                // Step 3: LLM call
+                                const response = await tracer.startActiveSpan(
+                                    "llm.call",
+                                    async (llmSpan) => {
+                                        try {
+                                            logger.info(`[AgentLoop] Sending to LLM (model=${context.model})`);
+                                            const resp = await this.llm.chat(context);
+                                            llmSpan.setAttribute("llm.model", context.model);
+                                            llmSpan.setAttribute("llm.response.type", resp.type);
+                                            return resp;
+                                        } catch (err) {
+                                            logger.error(`[AgentLoop] LLM call failed: ${err instanceof Error ? err.message : String(err)}`, {
+                                                stack: err instanceof Error ? err.stack : undefined,
+                                            });
+                                            llmSpan.recordException(err as Error);
+                                            llmSpan.setStatus({ code: SpanStatusCode.ERROR });
+                                            throw err;
+                                        } finally {
+                                            llmSpan.end();
+                                        }
+                                    }
+                                );
+                                logger.debug(`[AgentLoop] LLM response type: ${response.type}`);
 
-                        if (!tool) {
-                            logger.warn(`[AgentLoop] Tool "${toolCall.name}" not registered`);
-                            result = `Error: Tool "${toolCall.name}" is not registered.`;
-                        } else {
-                            // ── Human-in-the-loop: pause before destructive tools ──
-                            // Static flag (write/delete/...) OR dynamic check on the actual args
-                            // (bash command containing `rm -rf`, `git reset --hard`, ...).
-                            let shouldSkip = false;
-                            const isDestructiveCall =
-                                tool.destructive === true ||
-                                (typeof tool.isDestructive === "function" &&
-                                    tool.isDestructive(toolCall.args));
-                            if (isDestructiveCall && confirmHook) {
-                                const summary = JSON.stringify(toolCall.args).slice(0, 200);
-                                const msg = `Destructive action: ${toolCall.name}(${summary})`;
-                                logger.info(`[AgentLoop] ⏸ Pausing for user confirmation on ${toolCall.name}`, {
-                                    args: toolCall.args,
-                                });
-                                const confirmed = await confirmHook(msg, toolCall.name, toolCall.args);
-                                if (!confirmed) {
-                                    logger.info(`[AgentLoop] ✋ User rejected ${toolCall.name}`);
-                                    result = `User rejected the ${toolCall.name} operation. Inform them and do not retry unless asked.`;
-                                    const elapsed = Date.now() - startTime;
-                                    logger.info(`[AgentLoop] Tool "${toolCall.name}" skipped (user rejected) in ${elapsed}ms`);
-                                    shouldSkip = true;
-                                } else {
-                                    logger.info(`[AgentLoop] ✅ User confirmed ${toolCall.name} — proceeding`);
+                                // Exit condition: natural text answer
+                                if (response.type === "text") {
+                                    logger.info(`[AgentLoop] LLM returned text response (len=${response.content.length})`);
+
+                                    this.harness.messageManager.add({
+                                        sessionId,
+                                        role: "assistant",
+                                        content: response.content,
+                                        createdAt: new Date(),
+                                        messageId: randomUUID(),
+                                    });
+                                    logger.debug(`[AgentLoop] Assistant message stored — returning response`);
+
+                                    // Fire memory extraction in the background — do not block the response
+                                    this.saveMemoryAsync(sessionId);
+
+                                    return { done: true, content: response.content };
                                 }
-                            }
 
-                            if (!shouldSkip) {
-                                logger.debug(`[AgentLoop] Executing tool: ${toolCall.name}`, { args: toolCall.args });
-                                const raw = await tool.exec(toolCall.args);
-                                result = typeof raw === "string" ? raw : JSON.stringify(raw);
-                                const elapsed = Date.now() - startTime;
-                                logger.info(`[AgentLoop] Tool "${toolCall.name}" completed in ${elapsed}ms`, {
-                                    resultLen: result.length,
-                                });
+                                // Step 4: Tool call flow
+                                if (response.type === "tool_calls") {
+                                    logger.info(`[AgentLoop] LLM requested ${JSON.stringify(response)} for tool call(s)`);
+
+                                    const toolCalls: ToolCall[] = response.toolCalls;
+                                    logger.info(`[AgentLoop] LLM requested ${toolCalls.length} tool call(s)`);
+
+                                    // Log each tool call details
+                                    for (const tc of toolCalls) {
+                                        logger.info(`[AgentLoop]   → Tool: ${tc.name} | id: ${tc.id}`, { args: tc.args });
+                                    }
+
+                                    // Assistant intent — toolCalls is the plural array field
+                                    this.harness.messageManager.add({
+                                        sessionId,
+                                        role: "assistant",
+                                        content: "",
+                                        toolCalls: toolCalls,
+                                        createdAt: new Date(),
+                                        messageId: randomUUID(),
+                                    });
+                                    logger.debug(`[AgentLoop] Assistant tool-call message stored`);
+
+                                    // Execute each tool call
+                                    for (const toolCall of toolCalls) {
+                                        let result = "";
+                                        const startTime = Date.now();
+
+                                        try {
+                                            const tool = this.harness.toolRegistry.get(toolCall.name);
+
+                                            if (!tool) {
+                                                logger.warn(`[AgentLoop] Tool "${toolCall.name}" not registered`);
+                                                result = `Error: Tool "${toolCall.name}" is not registered.`;
+                                            } else {
+                                                // ── Human-in-the-loop: pause before destructive tools ──
+                                                // Static flag (write/delete/...) OR dynamic check on the actual args
+                                                // (bash command containing `rm -rf`, `git reset --hard`, ...).
+                                                let shouldSkip = false;
+                                                const isDestructiveCall =
+                                                    tool.destructive === true ||
+                                                    (typeof tool.isDestructive === "function" &&
+                                                        tool.isDestructive(toolCall.args));
+                                                if (isDestructiveCall && confirmHook) {
+                                                    const summary = JSON.stringify(toolCall.args).slice(0, 200);
+                                                    const msg = `Destructive action: ${toolCall.name}(${summary})`;
+                                                    logger.info(`[AgentLoop] ⏸ Pausing for user confirmation on ${toolCall.name}`, {
+                                                        args: toolCall.args,
+                                                    });
+                                                    const confirmed = await confirmHook(msg, toolCall.name, toolCall.args);
+                                                    if (!confirmed) {
+                                                        logger.info(`[AgentLoop] ✋ User rejected ${toolCall.name}`);
+                                                        result = `User rejected the ${toolCall.name} operation. Inform them and do not retry unless asked.`;
+                                                        const elapsed = Date.now() - startTime;
+                                                        logger.info(`[AgentLoop] Tool "${toolCall.name}" skipped (user rejected) in ${elapsed}ms`);
+                                                        shouldSkip = true;
+                                                    } else {
+                                                        logger.info(`[AgentLoop] ✅ User confirmed ${toolCall.name} — proceeding`);
+                                                    }
+                                                }
+
+                                                if (!shouldSkip) {
+                                                    logger.debug(`[AgentLoop] Executing tool: ${toolCall.name}`, { args: toolCall.args });
+                                                    const raw = await tracer.startActiveSpan(
+                                                        `tool.${toolCall.name}`,
+                                                        async (toolSpan) => {
+                                                            try {
+                                                                const execResult = await tool.exec(toolCall.args);
+                                                                toolSpan.setAttribute("tool.id", toolCall.id);
+                                                                return execResult;
+                                                            } catch (err) {
+                                                                toolSpan.recordException(err as Error);
+                                                                toolSpan.setStatus({ code: SpanStatusCode.ERROR });
+                                                                throw err;
+                                                            } finally {
+                                                                toolSpan.end();
+                                                            }
+                                                        }
+                                                    );
+                                                    result = typeof raw === "string" ? raw : JSON.stringify(raw);
+                                                    const elapsed = Date.now() - startTime;
+                                                    logger.info(`[AgentLoop] Tool "${toolCall.name}" completed in ${elapsed}ms`, {
+                                                        resultLen: result.length,
+                                                    });
+                                                }
+                                            }
+                                        } catch (err) {
+                                            const errMsg = err instanceof Error ? err.message : String(err);
+                                            logger.error(`[AgentLoop] Tool "${toolCall.name}" threw: ${errMsg}`, {
+                                                stack: err instanceof Error ? err.stack : undefined,
+                                            });
+                                            result = `Error: ${errMsg}`;
+                                        }
+
+                                        // AgentLoop.ts me, assistant tool-call message store karte waqt
+                                        function trimToolCallArgsForHistory(toolCalls: ToolCall[]): ToolCall[] {
+                                            return toolCalls.map((tc) => {
+                                                const trimmedArgs = { ...tc.args };
+                                                for (const key of Object.keys(trimmedArgs)) {
+                                                    const val = trimmedArgs[key];
+                                                    if (typeof val === "string" && val.length > 300) {
+                                                        trimmedArgs[key] = val.slice(0, 300) + `... [truncated, ${val.length - 300} more chars — full content was already written to disk]`;
+                                                    }
+                                                }
+                                                return { ...tc, args: trimmedArgs };
+                                            });
+                                        }
+
+                                        this.harness.messageManager.add({
+                                            sessionId,
+                                            role: "assistant",
+                                            content: "",
+                                            toolCalls: trimToolCallArgsForHistory(toolCalls), // ✅ ab history me sirf 300 chars jaayenge, poora 4000 nahi
+                                            createdAt: new Date(),
+                                            messageId: randomUUID(),
+                                        });
+                                        logger.debug(`[AgentLoop] Tool result stored for ${toolCall.name} (id=${toolCall.id})`);
+                                    }
+                                }
+
+                                return { done: false, content: "" };
+                            } catch (err) {
+                                iterSpan.recordException(err as Error);
+                                iterSpan.setStatus({ code: SpanStatusCode.ERROR });
+                                throw err;
+                            } finally {
+                                iterSpan.end();
                             }
                         }
-                    } catch (err) {
-                        const errMsg = err instanceof Error ? err.message : String(err);
-                        logger.error(`[AgentLoop] Tool "${toolCall.name}" threw: ${errMsg}`, {
-                            stack: err instanceof Error ? err.stack : undefined,
-                        });
-                        result = `Error: ${errMsg}`;
-                    }
+                    );
 
-                    // AgentLoop.ts me, assistant tool-call message store karte waqt
-                    function trimToolCallArgsForHistory(toolCalls: ToolCall[]): ToolCall[] {
-                        return toolCalls.map((tc) => {
-                            const trimmedArgs = { ...tc.args };
-                            for (const key of Object.keys(trimmedArgs)) {
-                                const val = trimmedArgs[key];
-                                if (typeof val === "string" && val.length > 300) {
-                                    trimmedArgs[key] = val.slice(0, 300) + `... [truncated, ${val.length - 300} more chars — full content was already written to disk]`;
-                                }
-                            }
-                            return { ...tc, args: trimmedArgs };
-                        });
+                    if (iteration.done) {
+                        return iteration.content;
                     }
-
-                    this.harness.messageManager.add({
-                        sessionId,
-                        role: "assistant",
-                        content: "",
-                        toolCalls: trimToolCallArgsForHistory(toolCalls), // ✅ ab history me sirf 300 chars jaayenge, poora 4000 nahi
-                        createdAt: new Date(),
-                        messageId: randomUUID(),
-                    });
-                    logger.debug(`[AgentLoop] Tool result stored for ${toolCall.name} (id=${toolCall.id})`);
                 }
+
+                // Max iterations reached without a final answer
+                logger.error(`[AgentLoop] Reached max iterations (${this.maxIterations}) without resolution`);
+
+                // Still worth extracting — e.g. to learn a "gets stuck on X" procedural pattern
+                this.saveMemoryAsync(sessionId);
+
+                throw new Error("Reached maximum loop iterations.");
+            } catch (err) {
+                span.recordException(err as Error);
+                span.setStatus({ code: SpanStatusCode.ERROR });
+                throw err;
+            } finally {
+                span.end();
             }
-        }
-
-        // Max iterations reached without a final answer
-        logger.error(`[AgentLoop] Reached max iterations (${this.maxIterations}) without resolution`);
-
-        // Still worth extracting — e.g. to learn a "gets stuck on X" procedural pattern
-        this.saveMemoryAsync(sessionId);
-
-        throw new Error("Reached maximum loop iterations.");
+        });
     }
 
     // --- Fire-and-forget memory extraction; failures are logged, never thrown ---
