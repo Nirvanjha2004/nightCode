@@ -34,7 +34,7 @@ async function main() {
     logger.info("=== NightCode Starting ===");
 
     // Guard env var before anything boots
-    const apiKey = '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';
+    const apiKey = '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';
     if (!apiKey) {
         logger.error("GROQ_API_KEY is not set in environment");
         throw new Error("GROQ_API_KEY is not set in environment");
