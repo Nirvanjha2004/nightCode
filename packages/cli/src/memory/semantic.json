@@ -54,5 +54,7 @@
   },
   "assistant": {
     "response": "4"
-  }
+  },
+  "project_folder": "new folder",
+  "authentication_system": "true"
 }
