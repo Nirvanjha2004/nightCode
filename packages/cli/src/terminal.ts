@@ -2,13 +2,15 @@ import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { createElement } from "react";
 import type { AgentLoop } from "../src/agent/loop";
+import type { Command } from "../components/commands-menu/types";
 import { App } from "./index";
 import { logger } from "./logger";
 
 export class TerminalUI {
     constructor(
         private sessionId: string,
-        private agentLoop: AgentLoop
+        private agentLoop: AgentLoop,
+        private commands: Command[] = []
     ) {}
 
     async start(): Promise<void> {
@@ -26,6 +28,7 @@ export class TerminalUI {
                 createElement(App, {
                     sessionId: this.sessionId,
                     agentLoop: this.agentLoop,
+                    commands: this.commands,
                 })
             );
             logger.info(`Terminal UI mounted (sessionId=${this.sessionId})`);

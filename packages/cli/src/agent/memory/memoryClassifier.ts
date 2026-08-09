@@ -1,7 +1,8 @@
 import Groq from "groq-sdk";
 
+// Bun auto-loads .env from project root; single shared lazy instance
 const groq = new Groq({
-    apiKey: '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',
+    apiKey: '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',
 });
 
 export interface ExtractionResult {

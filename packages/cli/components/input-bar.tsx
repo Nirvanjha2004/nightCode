@@ -5,6 +5,7 @@ import { useKeyboard } from "@opentui/react";
 import { StatusBar } from "./status-bar";
 import { CommandMenu } from "./commands-menu";
 import { useCommandMenu } from "./commands-menu/use-command-menu";
+import type { Command } from "./commands-menu/types";
 import { logger } from "../src/logger";
 
 const C = {
@@ -23,12 +24,14 @@ type Props = {
     onSubmit: (text: string) => void;
     disabled?: boolean;
     model?: string;
+    /** Commands to suggest in the menu (slash commands from the backend registry). */
+    commands: Command[];
 };
 
-export function InputBar({ onSubmit, disabled = false, model = "groq" }: Props) {
+export function InputBar({ onSubmit, disabled = false, model = "groq", commands }: Props) {
     const textareaRef = useRef<TextareaRenderable>(null);
     const scrollRef   = useRef<ScrollBoxRenderable | null>(null);
-    const cmd         = useCommandMenu();
+    const cmd         = useCommandMenu(commands);
     const cmdRef = useRef(cmd);
     cmdRef.current = cmd;
 
@@ -36,12 +39,10 @@ export function InputBar({ onSubmit, disabled = false, model = "groq" }: Props) 
         const c    = cmdRef.current;
         const text = textareaRef.current?.plainText ?? "";
 
-        if (text.startsWith("/")) {
+        if (text.startsWith("/") && !text.includes(" ")) {
             c.open(text);
         } else if (c.isOpen) {
             c.close();
-        } else {
-            c.updateQuery(text);
         }
     }, []);
 
@@ -74,7 +75,12 @@ export function InputBar({ onSubmit, disabled = false, model = "groq" }: Props) 
 
             if (isEnter) {
                 const command = c.filtered[c.selectedIndex];
-                if (command) c.selectAt(c.selectedIndex);
+                if (command) {
+                    // Insert the chosen command (with a trailing space, ready for
+                    // arguments) instead of submitting — slash commands take args.
+                    textareaRef.current?.setText(`${command.value} `);
+                    c.close();
+                }
                 keyEvent.preventDefault();
                 keyEvent.stopPropagation();
                 return;
@@ -126,10 +132,10 @@ export function InputBar({ onSubmit, disabled = false, model = "groq" }: Props) 
                     borderStyle="rounded"
                     borderColor={C.blue}
                     backgroundColor={C.surface0}
-                    padding={1}
+                    paddingX={1}
                     flexDirection="column"
                 >
-                    <box paddingX={1} paddingBottom={1}>
+                    <box paddingX={1}>
                         <text attributes={TextAttributes.BOLD} fg={C.blue}>
                             Commands
                         </text>
@@ -140,6 +146,7 @@ export function InputBar({ onSubmit, disabled = false, model = "groq" }: Props) 
 
                     <CommandMenu
                         query={cmd.query}
+                        commands={commands}
                         selectedIndex={cmd.selectedIndex}
                         scrollRef={scrollRef}
                         onSelect={(index) => cmd.selectAt(index)}

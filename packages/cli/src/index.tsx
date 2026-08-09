@@ -7,6 +7,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import "./telemetry";
 import type { AgentLoop } from "../src/agent/loop";
 import type { ConfirmHook } from "./agent/types";
+import type { Command } from "../components/commands-menu/types";
 import { logger } from "./logger";
 // Display-only — agent context lives in backend MessageManager, not here
 type DisplayMessage = {
@@ -18,6 +19,8 @@ type DisplayMessage = {
 type Props = {
     sessionId: string;
     agentLoop: AgentLoop;
+    /** Slash commands loaded from the backend registry, suggested while typing. */
+    commands: Command[];
 };
 
 // ── Color palette (Catppuccin Mocha inspired) ─────────────────────────────────
@@ -184,7 +187,7 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
 }
 
 // ── Main App ───────────────────────────────────────────────────────────────────
-export function App({ sessionId, agentLoop }: Props) {
+export function App({ sessionId, agentLoop, commands }: Props) {
     const [messages, setMessages] = useState<DisplayMessage[]>([]);
     const [loading, setLoading] = useState(false);
     const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
@@ -331,7 +334,11 @@ export function App({ sessionId, agentLoop }: Props) {
                 borderColor={C.overlay0}
                 backgroundColor={C.surface0}
             >
-                <InputBar onSubmit={handleSubmit} disabled={loading || !!pendingConfirm} />
+                <InputBar
+                    onSubmit={handleSubmit}
+                    disabled={loading || !!pendingConfirm}
+                    commands={commands}
+                />
             </box>
         </box>
     );

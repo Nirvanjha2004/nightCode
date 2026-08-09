@@ -1,21 +1,18 @@
 import { useState, useCallback } from "react";
 import { getFiltererdCommands } from "./filter-commands";
+import type { Command } from "./types";
 
-export function useCommandMenu() {
+export function useCommandMenu(commands: Command[]) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  const filtered = getFiltererdCommands(query);
+  const filtered = getFiltererdCommands(query, commands);
 
   const open = useCallback((text: string) => {
     setQuery(text);
     setIsOpen(true);
     setSelectedIndex(0);
-  }, []);
-
-  const updateQuery = useCallback((text: string) => {
-    setQuery(text);
   }, []);
 
   const close = useCallback(() => {
@@ -42,7 +39,6 @@ export function useCommandMenu() {
     filtered,
     selectedIndex,
     open,
-    updateQuery,
     close,
     selectAt,
     navigateUp,

@@ -2,11 +2,13 @@ import type { RefObject } from "react";
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 
 import { getFiltererdCommands } from "./filter-commands";
+import type { Command } from "./types";
 
 const MAX_VISIBLE_ITEMS = 8;
 
 type CommandMenuProps = {
     query : string;
+    commands : Command[];
     selectedIndex : number;
     scrollRef : RefObject<ScrollBoxRenderable |  null>;
     onSelect : (index : number) => void;
@@ -14,8 +16,8 @@ type CommandMenuProps = {
 }
 
 export function CommandMenu(props : CommandMenuProps) {
-    const { query, selectedIndex, scrollRef, onSelect, onExecute } = props;
-    const filtered = getFiltererdCommands(query);
+    const { query, commands, selectedIndex, scrollRef, onSelect, onExecute } = props;
+    const filtered = getFiltererdCommands(query, commands);
     const visibleHeight = Math.min(filtered.length, MAX_VISIBLE_ITEMS);
 
     if(filtered.length === 0) {

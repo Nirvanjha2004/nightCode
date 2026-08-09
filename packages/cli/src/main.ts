@@ -7,6 +7,7 @@ import { AgentHarness } from "./agent/agent-harness";
 import { AgentLoop } from "./agent/loop";
 import { GroqClient } from "./llm-client/groq-client";
 import { TerminalUI } from "./terminal";
+import type { Command } from "../components/commands-menu/types";
 import { logger } from "./logger";
 
 //// Tools — all 14, not just 3
@@ -34,11 +35,11 @@ import Groq from "groq-sdk";
 async function main() {
     logger.info("=== NightCode Starting ===");
 
-    // Guard env var before anything boots
-    const apiKey = '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';
+    // Guard env var before anything boots (Bun auto-loads .env from project root)
+    const apiKey = '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';
     if (!apiKey) {
-        logger.error("GROQ_API_KEY is not set in environment");
-        throw new Error("GROQ_API_KEY is not set in environment");
+        logger.error("GROQ_API_KEY is not set — add it to .env at the project root");
+        throw new Error("GROQ_API_KEY is not set in environment / .env");
     }
 
     // 1. Managers — no dependencies, boot first
@@ -118,9 +119,16 @@ async function main() {
     });
     logger.info(`Session created: ${sessionId}`);
 
-    // 8. Hand off to UI
+    // 8. Hand off to UI — the command menu suggests the loaded slash commands
+    //    (name + description) as the user types; built-in UI commands are merged
+    //    in the frontend.
     logger.info("Starting Terminal UI...");
-    const ui = new TerminalUI(sessionId, agentLoop);
+    const slashCommands: Command[] = commandRegistry.list().map((command) => ({
+        name: command.name,
+        description: command.description ?? command.argumentHint ?? "",
+        value: `/${command.name}`,
+    }));
+    const ui = new TerminalUI(sessionId, agentLoop, slashCommands);
     await ui.start();
 }
 

@@ -1,7 +1,7 @@
 // commands.check.ts — tiny assert-based self-check for slash-command logic.
 // Run with: bun packages/cli/src/agent/commands.check.ts
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Groq from "groq-sdk";
@@ -159,7 +159,30 @@ Run git diff. Do NOT modify files.`);
     );
     assert.equal(ctx2.tools.length, 6, "normal messages expose all tools");
 
-    console.log("PASS — slash command registry, resolver, tool filtering, and loop integration verified.");
+    // ── cwd-independent command discovery ────────────────────────────────
+    // Regression: launching from packages/cli resolved "commands" against the
+    // wrong cwd and loaded zero commands. Loading from a nested cwd must find
+    // the nearest ancestor `commands/` directory by walking up. Self-contained
+    // (temp tree) so it never depends on the repo's own commands folder.
+    const cmdHome = mkdtempSync(join(tmpdir(), "cmd-home-"));
+    const nestedCwd = join(cmdHome, "a", "b");
+    mkdirSync(nestedCwd, { recursive: true });
+    mkdirSync(join(cmdHome, "commands"));
+    writeFileSync(join(cmdHome, "commands", "greet.md"), "Say hi to $ARGUMENTS.");
+
+    const prevCwd = process.cwd();
+    try {
+        process.chdir(nestedCwd);
+        const nestedRegistry = new CommandRegistry();
+        await nestedRegistry.loadFromDir("commands");
+        assert.equal(nestedRegistry.list().length, 1, "commands resolve from a nested cwd");
+        assert.ok(nestedRegistry.get("greet"), "the nearest ancestor commands dir is used");
+    } finally {
+        process.chdir(prevCwd);
+        rmSync(cmdHome, { recursive: true, force: true });
+    }
+
+    console.log("PASS — slash command registry, resolver, tool filtering, loop integration, and cwd-independent discovery verified.");
 } finally {
     rmSync(dir, { recursive: true, force: true });
 }

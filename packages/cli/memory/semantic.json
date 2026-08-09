@@ -1,0 +1,33 @@
+{
+  "user": {
+    "question": "unknown command /COMMIT",
+    "query": "/COMMIT",
+    "environment": "development",
+    "tools": "grep, ls, bash",
+    "assistant": {
+      "tools": "read, write, append, edit, delete, mkdir, ls, glob, find, grep, rename, copy, bash, todoWrite"
+    }
+  },
+  "assistant": {
+    "response": "unknown command",
+    "context": "Git, database, custom/IDE-specific, AI agent slash command"
+  },
+  "tools": {
+    "checked": "grep, ls, bash"
+  },
+  "available_tools": "['read', 'write', 'append', 'edit', 'delete', 'mkdir', 'ls', 'glob', 'find', 'grep', 'rename', 'copy', 'bash', 'todoWrite']",
+  "slash_commands": "not supported",
+  "interface": "direct tool calls",
+  "supported_actions": "read file, edit/write files, run shell commands, search code, manage directories",
+  "default_tool": "bash",
+  "tool": {
+    "support": "direct tool calls"
+  },
+  "git": {
+    "commit": {
+      "message": "fix: something"
+    }
+  },
+  "user_request_type": "review",
+  "required_context": "project or directory path and specific review request"
+}
