@@ -8,3 +8,8 @@
 8. [tools return no output] request additional context when tools return no output
 9. [subagent access request] always request user confirmation for subagent access
 10. [tool call failure] check environment status before proceeding
+11. [spawn_subagent with write permissions] request_confirmation_before_write_access
+12. [subagent write permissions requested] request confirmation before spawning subagent with write permissions
+13. [spawn_subagent] Request user confirmation for write access before spawning subagent
+14. [spawn_subagent] always confirm write access before spawning a subagent
+15. [git commit] use git add and git commit separately to avoid errors

@@ -9,6 +9,28 @@ import { markSpanError, tracer } from "../telemetry";
 
 const LLM_TEMPERATURE = 0.1;
 
+// Groq's SDK wraps the API error body: `err.error` is the WHOLE response body
+// `{ error: { code, message, ... } }`, so the code lives at `err.error.error.code`.
+// The flat fallbacks cover other SDK shapes/versions; returning undefined means
+// "unrecognized error" — the caller logs it and rethrows.
+export function getGroqErrorCode(err: unknown): string | undefined {
+    const e = err as { error?: { error?: { code?: string }; code?: string }; code?: string };
+    return e?.error?.error?.code ?? e?.error?.code ?? e?.code;
+}
+
+// The model occasionally emits tool calls in a wrong format (e.g. XML
+// `<function=...>` instead of Groq's native JSON). Groq rejects the request
+// with `tool_use_failed` and includes the rejected generation — we replay it
+// back to the model so it can see exactly what it did wrong and correct it.
+const REPAIR_PROMPT = `
+
+IMPORTANT:
+Use ONLY the native tool calling interface.
+Never emit XML tags such as <function>.
+Never emit JSON describing a tool call.
+If a tool is needed, use the provided tool interface.
+Otherwise answer normally.`;
+
 export class GroqClient implements LLMClient {
     private client: Groq;
 
@@ -25,7 +47,7 @@ export class GroqClient implements LLMClient {
         try {
             return await this.callGroq(context);
         } catch (err: any) {
-            const code = err?.error?.code ?? err?.code;
+            const code = getGroqErrorCode(err);
 
             logger.error(
                 `[GroqClient] Request failed (${code ?? "unknown"}) : ${
@@ -38,19 +60,41 @@ export class GroqClient implements LLMClient {
                     "[GroqClient] Retrying once with tool-calling repair prompt"
                 );
 
-                return await this.callGroq({
-                    ...context,
-                    systemPrompt:
-                        context.systemPrompt +
-                        `
+                try {
+                    const failedGeneration =
+                        (err?.error?.error as { failed_generation?: string } | undefined)
+                            ?.failed_generation ?? "";
+                    const feedback = failedGeneration
+                        ? `\n\nYour previous response was rejected because it used an invalid tool-call format. You wrote:\n${failedGeneration.slice(0, 1500)}`
+                        : "";
 
-IMPORTANT:
-Use ONLY the native tool calling interface.
-Never emit XML tags such as <function>.
-Never emit JSON describing a tool call.
-If a tool is needed, use the provided tool interface.
-Otherwise answer normally.`,
-                });
+                    return await this.callGroq({
+                        ...context,
+                        systemPrompt: context.systemPrompt + REPAIR_PROMPT + feedback,
+                    });
+                } catch (repairErr: any) {
+                    const repairCode = getGroqErrorCode(repairErr);
+
+                    if (repairCode === "tool_use_failed") {
+                        // Final fallback: retry WITHOUT tools so the model is forced
+                        // to answer in plain text rather than crash the whole turn.
+                        logger.warn(
+                            "[GroqClient] Repair retry also produced invalid tool calls — retrying once without tools (text-only)"
+                        );
+                        return await this.callGroq(
+                            {
+                                ...context,
+                                tools: [],
+                                systemPrompt:
+                                    context.systemPrompt +
+                                    `\n\nIMPORTANT:\nTool calling is currently unavailable. Answer the user's request directly in plain text based on the conversation so far.`,
+                            },
+                            "none" // explicit: no tool calls allowed, plain text only
+                        );
+                    }
+
+                    throw repairErr;
+                }
             }
 
             throw err;
@@ -58,7 +102,8 @@ Otherwise answer normally.`,
     }
 
     private async callGroq(
-        context: ContextType
+        context: ContextType,
+        toolChoice: "auto" | "none" = "auto"
     ): Promise<LLMResponse> {
         return tracer.startActiveSpan("llm.call", async (llmSpan): Promise<LLMResponse> => {
             try {
@@ -76,7 +121,7 @@ Otherwise answer normally.`,
 
                     tools: context.tools,
 
-                    tool_choice: "auto",
+                    tool_choice: toolChoice,
 
                     temperature: LLM_TEMPERATURE,
 

@@ -131,7 +131,20 @@ async function main() {
             "parent sees the spawn_subagent tool"
         );
 
-        // 3. Memory extraction fired exactly once — for the parent only.
+        // 3. Regression guard: the spawn_subagent TOOL RESULT must be stored back
+        //    in message history as a role:"tool" message linked by toolCallId.
+        //    (Regression: ce8ba03 accidentally replaced this storage with a
+        //    duplicate assistant intent message, so tool outputs never reached
+        //    the model — every tool looked like it returned empty results.)
+        const parentHistory = messageManager.get(parentSessionId);
+        const toolResults = parentHistory.filter((m) => m.role === "tool");
+        assert.equal(toolResults.length, 1, "spawn_subagent result stored as a tool message");
+        const spawnResult = toolResults[0];
+        assert.ok(spawnResult, "tool result message present");
+        assert.equal(spawnResult.toolCallId, "call_1", "tool result links to the assistant intent by toolCallId");
+        assert.equal(spawnResult.content, "subagent report", "tool result carries the subagent's final summary");
+
+        // 4. Memory extraction fired exactly once — for the parent only.
         // saveMemoryAsync is fire-and-forget; give the promise a beat to resolve.
         await new Promise((r) => setTimeout(r, 50));
         assert.equal(extractionCount, 1, "memory extraction ran for the parent only, not the subagent");
@@ -140,7 +153,7 @@ async function main() {
             "parent trace stored"
         );
 
-        // 4. Trust-boundary guards: the schema's `required` is advisory, so the
+        // 5. Trust-boundary guards: the schema's `required` is advisory, so the
         //    tool must reject a malformed call itself (no silent full-tool fallback).
         await assert.rejects(
             spawnSubagent.exec({ task: "something" }, harness),

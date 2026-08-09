@@ -6,7 +6,9 @@
     "tools": "grep, ls, bash",
     "assistant": {
       "tools": "read, write, append, edit, delete, mkdir, ls, glob, find, grep, rename, copy, bash, todoWrite"
-    }
+    },
+    "name": "nirvan jha",
+    "institution": "iiitdm kancheepuram"
   },
   "assistant": {
     "response": "unknown command",
@@ -32,5 +34,16 @@
   "required_context": "project or directory path and specific review request",
   "user_access": "has access to spawn subagent",
   "environment_status": "empty or restricted",
-  "project_directory_path": "unknown"
+  "project_directory_path": "unknown",
+  "access": "spawn_subagent",
+  "write_access": "requires_confirmation",
+  "write_access_tools": "write, mkdir",
+  "subagent": {
+    "permission": "write",
+    "write_access": "true"
+  },
+  "default_file_path": "hello.txt",
+  "file": {
+    "path": "hello.txt"
+  }
 }

@@ -23,6 +23,22 @@ export interface ExecuteOptions {
     allowedTools?: string[];
 }
 
+// Tool-call args are trimmed when stored in history so one giant `write`/`bash`
+// arg can't bloat the context window. IDs are preserved — only the string args
+// are shortened — so the stored assistant intent still links to its tool results.
+function trimToolCallArgsForHistory(toolCalls: ToolCall[]): ToolCall[] {
+    return toolCalls.map((tc) => {
+        const trimmedArgs = { ...tc.args };
+        for (const key of Object.keys(trimmedArgs)) {
+            const val = trimmedArgs[key];
+            if (typeof val === "string" && val.length > 300) {
+                trimmedArgs[key] = val.slice(0, 300) + `... [truncated, ${val.length - 300} more chars — full content was already written to disk]`;
+            }
+        }
+        return { ...tc, args: trimmedArgs };
+    });
+}
+
 export class AgentLoop {
     constructor(
         private harness: AgentHarness,
@@ -194,12 +210,15 @@ export class AgentLoop {
                                         logger.info(`[AgentLoop]   → Tool: ${tc.name} | id: ${tc.id}`, { args: tc.args });
                                     }
 
-                                    // Assistant intent — toolCalls is the plural array field
+                                    // Assistant intent — toolCalls is the plural array field.
+                                    // Stored ONCE, with trimmed args, right before the tools run;
+                                    // each tool's RESULT is then appended below as a role:"tool"
+                                    // message (linked by toolCallId) so the model can see it.
                                     this.harness.messageManager.add({
                                         sessionId,
                                         role: "assistant",
                                         content: "",
-                                        toolCalls: toolCalls,
+                                        toolCalls: trimToolCallArgsForHistory(toolCalls),
                                         createdAt: new Date(),
                                         messageId: randomUUID(),
                                     });
@@ -290,25 +309,16 @@ export class AgentLoop {
                                             }
                                         );
 
-                                        // AgentLoop.ts me, assistant tool-call message store karte waqt
-                                        function trimToolCallArgsForHistory(toolCalls: ToolCall[]): ToolCall[] {
-                                            return toolCalls.map((tc) => {
-                                                const trimmedArgs = { ...tc.args };
-                                                for (const key of Object.keys(trimmedArgs)) {
-                                                    const val = trimmedArgs[key];
-                                                    if (typeof val === "string" && val.length > 300) {
-                                                        trimmedArgs[key] = val.slice(0, 300) + `... [truncated, ${val.length - 300} more chars — full content was already written to disk]`;
-                                                    }
-                                                }
-                                                return { ...tc, args: trimmedArgs };
-                                            });
-                                        }
-
+                                        // Store the tool RESULT back into history (role:"tool", linked
+                                        // to the assistant intent via toolCallId). This is what the model
+                                        // actually sees on the next iteration — without it, Groq rejects
+                                        // the orphaned tool_calls message and the agent never learns
+                                        // what any tool returned.
                                         this.harness.messageManager.add({
                                             sessionId,
-                                            role: "assistant",
-                                            content: "",
-                                            toolCalls: trimToolCallArgsForHistory(toolCalls), // ✅ ab history me sirf 300 chars jaayenge, poora 4000 nahi
+                                            role: "tool",
+                                            content: result,
+                                            toolCallId: toolCall.id,
                                             createdAt: new Date(),
                                             messageId: randomUUID(),
                                         });
