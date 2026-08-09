@@ -29,5 +29,8 @@
     }
   },
   "user_request_type": "review",
-  "required_context": "project or directory path and specific review request"
+  "required_context": "project or directory path and specific review request",
+  "user_access": "has access to spawn subagent",
+  "environment_status": "empty or restricted",
+  "project_directory_path": "unknown"
 }

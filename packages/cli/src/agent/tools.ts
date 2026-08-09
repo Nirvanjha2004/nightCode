@@ -772,3 +772,84 @@ export const todoWrite: Tool = {
         return result;
     },
 };
+
+// ── spawn_subagent ────────────────────────────────────────────────────────
+// Delegates a focused sub-task to a FRESH, isolated AgentLoop execution — same
+// execution engine, fresh sessionId (fresh message history), restricted tools,
+// no memory writes. There is exactly one execution engine in this codebase;
+// isolation comes from a fresh session, not from a second loop class.
+export const spawnSubagent: Tool = {
+    name: "spawn_subagent",
+    description:
+        "Delegate a focused, self-contained sub-task to a fresh agent instance with its own " +
+        "isolated context (no parent conversation history). Use this for exploratory or " +
+        "investigative work whose intermediate steps would be noisy in the main context " +
+        "(e.g. searching many files) — only the final summary comes back to you. " +
+        "The sub-task description must be fully self-contained since the subagent cannot " +
+        "see anything from this conversation except what you put in `task`.",
+    parameters: {
+        type: "object",
+        properties: {
+            task: {
+                type: "string",
+                description:
+                    "A clear, self-contained description of what the subagent should do and what it should report back.",
+            },
+            allowedTools: {
+                type: "array",
+                items: { type: "string" },
+                description:
+                    "Tool names the subagent may use. Keep this scoped to what the task actually needs — " +
+                    "e.g. [\"read\", \"grep\", \"glob\"] for investigation, don't grant write/edit/delete/bash " +
+                    "unless the task genuinely requires making changes.",
+            },
+        },
+        required: ["task", "allowedTools"],
+    },
+    destructive: false,
+    exec: async (args, harness) => {
+        const log = toolLogger("spawn_subagent");
+        log.start(args);
+        const start = Date.now();
+        const { task, allowedTools } = args as { task: string; allowedTools: string[] };
+
+        // Trust boundary: the loop always passes the harness (with agentLoop wired
+        // at startup); these guards exist so a wiring slip or a malformed model call
+        // fails LOUDLY instead of silently degrading.
+        if (!harness?.agentLoop) {
+            throw new Error("spawn_subagent requires a harness with a wired agentLoop (internal wiring error).");
+        }
+
+        // The JSON-schema `required` list is advisory — a model can still omit
+        // allowedTools, and that would silently grant the subagent FULL tool
+        // access (effectiveAllowedTools would fall through to undefined).
+        // Reject such calls outright: this is the whole safety mechanism.
+        if (!Array.isArray(allowedTools) || allowedTools.length === 0) {
+            throw new Error(
+                "spawn_subagent requires a non-empty `allowedTools` array — scope the sub-task explicitly (e.g. [\"read\", \"grep\", \"glob\"])."
+            );
+        }
+        if (typeof task !== "string" || task.trim() === "") {
+            throw new Error("spawn_subagent requires a non-empty `task` string.");
+        }
+
+        // Fresh, isolated session — its message history is completely separate
+        // from the parent's. Cheap, fast model: a focused sub-task, not a chat.
+        const subSessionId = harness.sessionManager.create({ model: "llama-3.1-8b-instant" });
+
+        // Snapshot current memory ONCE (semantic facts + procedural rules) and
+        // hand it over as static context — no episodic retrieval, no writes back.
+        const facts = harness.semanticMemoryManager.toPromptString();
+        const rules = harness.proceduralMemoryManager.toPromptString();
+        const overrideMemoryContext = `## Known facts\n${facts}\n\n${rules}`;
+
+        const result = await harness.agentLoop.execute(subSessionId, task, {
+            isSubagent: true,
+            skipMemoryExtraction: true,
+            overrideMemoryContext,
+            allowedTools,
+        });
+        log.success(`${result.length} chars`, Date.now() - start);
+        return result;
+    },
+};

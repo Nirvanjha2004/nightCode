@@ -26,6 +26,7 @@ import {
     copy,
     bash,
     todoWrite,
+    spawnSubagent,
 } from "./agent/tools";
 import { EpisodicMemoryManager } from "./agent/memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./agent/memory/SemanticMemoryManager";
@@ -68,6 +69,7 @@ async function main() {
     toolRegistry.register(copy);
     toolRegistry.register(bash);
     toolRegistry.register(todoWrite);
+    toolRegistry.register(spawnSubagent);
 
     const registeredNames = toolRegistry.list().map((t) => t.name);
     logger.info(`Built-in tools registered (${registeredNames.length}): ${registeredNames.join(", ")}`);
@@ -112,6 +114,10 @@ async function main() {
     logger.debug("Creating AgentLoop...");
     const agentLoop = new AgentLoop(harness, llm, 10);
     logger.info("AgentLoop created (maxIterations=10)");
+
+    // 6.5. Hand the loop to the harness — tools like spawn_subagent call back
+    //      into the SAME loop instance to run nested, isolated sub-sessions.
+    harness.agentLoop = agentLoop;
 
     // 7. Create a session before UI starts
     const sessionId = sessionManager.create({

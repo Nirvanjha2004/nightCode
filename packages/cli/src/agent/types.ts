@@ -1,4 +1,5 @@
 import type Groq from "groq-sdk";
+import type { AgentHarness } from "./agent-harness";
 
 // types.ts
 export type Tool = {
@@ -22,7 +23,13 @@ export type Tool = {
         }>;
         required?: string[];
     };
-    exec: (args: Record<string, unknown>) => Promise<unknown>;
+    /**
+     * Second param is the AgentHarness, passed by the loop on every call.
+     * Optional for backward compatibility with tools that don't need it
+     * (and with direct calls in self-checks) — a tool that DOES need it
+     * must guard against it being undefined.
+     */
+    exec: (args: Record<string, unknown>, harness?: AgentHarness) => Promise<unknown>;
 };
 
 /**

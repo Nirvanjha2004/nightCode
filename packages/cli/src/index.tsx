@@ -247,7 +247,7 @@ export function App({ sessionId, agentLoop, commands }: Props) {
         setLoading(true);
         try {
             const confirmHook = buildConfirmHook();
-            const response = await agentLoop.execute(sessionId, trimmed, confirmHook);
+            const response = await agentLoop.execute(sessionId, trimmed, { confirmHook });
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
         } catch (err) {

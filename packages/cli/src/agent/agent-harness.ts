@@ -1,4 +1,5 @@
 import type { ContextBuilder } from "./context";
+import type { AgentLoop } from "./loop";
 import type { CommandRegistry } from "./commands";
 import type { MessageManager } from "./messages";
 import type { ToolRegistry } from "./registry";
@@ -13,6 +14,14 @@ import { extractMemories } from "./memory/memoryClassifier";
 import { markSpanError, tracer } from "../telemetry";
 
 export class AgentHarness {
+    /**
+     * Set once at startup, right after AgentLoop is constructed, so tools
+     * (e.g. spawn_subagent) can call back into the same loop instance.
+     * Deliberately a post-construction assignment — not constructor DI — to
+     * avoid restructuring the existing injection order.
+     */
+    public agentLoop!: AgentLoop;
+
     constructor(
         public messageManager: MessageManager,
         public sessionManager: SessionManager,

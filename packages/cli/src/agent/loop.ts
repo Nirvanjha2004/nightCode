@@ -6,6 +6,23 @@ import { logger } from "../logger";
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { markSpanError, tracer } from "../telemetry";
 
+/**
+ * Per-call options for AgentLoop.execute. All fields optional — a normal
+ * user message passes no options and behaves exactly as before.
+ */
+export interface ExecuteOptions {
+    /** HITL confirmation hook (destructive tool guard), same as the old bare third param. */
+    confirmHook?: ConfirmHook;
+    /** Marks this execution as a subagent run (span attribute only). */
+    isSubagent?: boolean;
+    /** Skip the background memory-extraction pass — used by subagents (no duplicate memory writes). */
+    skipMemoryExtraction?: boolean;
+    /** Pre-built memory context; skips the (embedding-costly) buildMemoryContext call entirely. */
+    overrideMemoryContext?: string;
+    /** Tool scope for this turn; overrides any slash-command allowed-tools. */
+    allowedTools?: string[];
+}
+
 export class AgentLoop {
     constructor(
         private harness: AgentHarness,
@@ -13,13 +30,14 @@ export class AgentLoop {
         private maxIterations: number = 10
     ) { }
 
-    async execute(sessionId: string, userInput: string, confirmHook?: ConfirmHook): Promise<string> {
+    async execute(sessionId: string, userInput: string, options?: ExecuteOptions): Promise<string> {
         return tracer.startActiveSpan("agent.execute", async (span) => {
             try {
                 span.setAttribute("session.id", sessionId);
                 span.setAttribute("model.name", this.harness.sessionManager.get(sessionId)?.model ?? "unknown");
                 span.setAttribute("user.input.length", userInput.length);
                 span.setAttribute("max_iterations", this.maxIterations);
+                span.setAttribute("is_subagent", options?.isSubagent ?? false);
                 span.addEvent("Agent execution started");
 
                 logger.info(`[AgentLoop] Starting execution — session=${sessionId}`, {
@@ -57,15 +75,22 @@ export class AgentLoop {
                 logger.debug(`[AgentLoop] User message stored (len=${userInput.length})`);
 
                 // Step 1.5: Build memory context ONCE per user turn (not per iteration)
+                // Subagents skip the lookup entirely — the caller injects a static memory
+                // snapshot (overrideMemoryContext) instead, so no episodic embedding call.
                 let memoryContext = "";
-                try {
-                    memoryContext = await this.harness.buildMemoryContext(resolvedInput);
-                    logger.debug(`[AgentLoop] Memory context built (len=${memoryContext.length})`);
-                } catch (err) {
-                    logger.error(`[AgentLoop] Failed to build memory context: ${err instanceof Error ? err.message : String(err)}`, {
-                        stack: err instanceof Error ? err.stack : undefined,
-                    });
-                    memoryContext = "";
+                if (options?.overrideMemoryContext !== undefined) {
+                    memoryContext = options.overrideMemoryContext;
+                    logger.debug(`[AgentLoop] Memory context overridden (len=${memoryContext.length})`);
+                } else {
+                    try {
+                        memoryContext = await this.harness.buildMemoryContext(resolvedInput);
+                        logger.debug(`[AgentLoop] Memory context built (len=${memoryContext.length})`);
+                    } catch (err) {
+                        logger.error(`[AgentLoop] Failed to build memory context: ${err instanceof Error ? err.message : String(err)}`, {
+                            stack: err instanceof Error ? err.stack : undefined,
+                        });
+                        memoryContext = "";
+                    }
                 }
 
                 for (let iter = 1; iter <= this.maxIterations; iter++) {
@@ -84,14 +109,17 @@ export class AgentLoop {
                                     async (ctxSpan) => {
                                         try {
                                             ctxSpan.addEvent("Building context");
-                                            // allowedTools (from the active slash command) stays in effect for
-                                            // EVERY context rebuild of this turn, across all ReAct iterations.
+                                            // The tool scope stays in effect for EVERY context rebuild of this
+                                            // turn, across all ReAct iterations. Subagent restrictions (options)
+                                            // take precedence over the active slash command's allowed-tools.
                                             // resolvedInput is substituted for the last user message inside
                                             // the context builder, so the model sees the expanded prompt.
+                                            const effectiveAllowedTools =
+                                                options?.allowedTools ?? activeCommand?.allowedTools;
                                             const built = await this.harness.contextBuilder.build(
                                                 sessionId,
                                                 memoryContext,
-                                                activeCommand?.allowedTools,
+                                                effectiveAllowedTools,
                                                 resolvedInput
                                             );
                                             ctxSpan.setAttribute("context.messages", built.messages.length);
@@ -145,7 +173,10 @@ export class AgentLoop {
                                     logger.debug(`[AgentLoop] Assistant message stored — returning response`);
 
                                     // Fire memory extraction in the background — do not block the response
-                                    this.saveMemoryAsync(sessionId, span);
+                                    // Subagents skip extraction entirely (no duplicate memory writes).
+                                    if (!options?.skipMemoryExtraction) {
+                                        this.saveMemoryAsync(sessionId, span);
+                                    }
 
                                     iterSpan.addEvent("Iteration completed");
                                     return { done: true, content: response.content };
@@ -211,13 +242,13 @@ export class AgentLoop {
                                                             tool.isDestructive(toolCall.args));
                                                     toolSpan.setAttribute("tool.destructive", isDestructiveCall);
 
-                                                    if (isDestructiveCall && confirmHook) {
+                                                    if (isDestructiveCall && options?.confirmHook) {
                                                         const summary = JSON.stringify(toolCall.args).slice(0, 200);
                                                         const msg = `Destructive action: ${toolCall.name}(${summary})`;
                                                         logger.info(`[AgentLoop] ⏸ Pausing for user confirmation on ${toolCall.name}`, {
                                                             args: toolCall.args,
                                                         });
-                                                        const confirmed = await confirmHook(msg, toolCall.name, toolCall.args);
+                                                        const confirmed = await options.confirmHook(msg, toolCall.name, toolCall.args);
                                                         if (!confirmed) {
                                                             logger.info(`[AgentLoop] ✋ User rejected ${toolCall.name}`);
                                                             result = `User rejected the ${toolCall.name} operation. Inform them and do not retry unless asked.`;
@@ -232,7 +263,8 @@ export class AgentLoop {
                                                     }
 
                                                     logger.debug(`[AgentLoop] Executing tool: ${toolCall.name}`, { args: toolCall.args });
-                                                    const execResult = await tool.exec(toolCall.args);
+                                                    // Pass the harness so tools (e.g. spawn_subagent) can call back into the loop.
+                                                    const execResult = await tool.exec(toolCall.args, this.harness);
                                                     result = typeof execResult === "string" ? execResult : JSON.stringify(execResult);
                                                     const elapsed = Date.now() - startTime;
                                                     logger.info(`[AgentLoop] Tool "${toolCall.name}" completed in ${elapsed}ms`, {
@@ -307,7 +339,9 @@ export class AgentLoop {
                 span.addEvent("Maximum iterations reached");
 
                 // Still worth extracting — e.g. to learn a "gets stuck on X" procedural pattern
-                this.saveMemoryAsync(sessionId, span);
+                if (!options?.skipMemoryExtraction) {
+                    this.saveMemoryAsync(sessionId, span);
+                }
 
                 throw new Error("Reached maximum loop iterations.");
             } catch (err) {

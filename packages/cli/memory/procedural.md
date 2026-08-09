@@ -6,3 +6,5 @@
 6. [unsupported slash commands] use direct tool calls
 7. [commit request] use 'Commit the changes with message' for git commit
 8. [tools return no output] request additional context when tools return no output
+9. [subagent access request] always request user confirmation for subagent access
+10. [tool call failure] check environment status before proceeding
