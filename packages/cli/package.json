@@ -15,6 +15,7 @@
   "dependencies": {
     "@opentui/core": "^0.4.5",
     "@opentui/react": "^0.4.5",
+    "gray-matter": "^4.0.3",
     "react": "^19.2.6",
     "winston": "^3.19.0"
   }

@@ -2,6 +2,7 @@ import { MessageManager } from "./agent/messages";
 import { SessionManager } from "./agent/session";
 import { ToolRegistry } from "./agent/registry";
 import { ContextBuilder } from "./agent/context";
+import { CommandRegistry } from "./agent/commands";
 import { AgentHarness } from "./agent/agent-harness";
 import { AgentLoop } from "./agent/loop";
 import { GroqClient } from "./llm-client/groq-client";
@@ -82,6 +83,12 @@ async function main() {
     );
     logger.info("ContextBuilder created");
 
+    // Command registry — created and loaded ONCE at startup (not per message).
+    // Slash commands resolve to prompt templates + optional tool scope.
+    const commandRegistry = new CommandRegistry();
+    await commandRegistry.loadFromDir("commands");
+    logger.info(`Command registry loaded — ${commandRegistry.list().length} command(s)`);
+
     // 4. Harness — bundles everything the loop needs
     logger.debug("Creating AgentHarness...");
     const harness = new AgentHarness(
@@ -91,7 +98,8 @@ async function main() {
         contextBuilder,
         episodicMemory,
         semanticMemory,
-        proceduralMemory
+        proceduralMemory,
+        commandRegistry
     );
     logger.info("AgentHarness created");
 

@@ -26,4 +26,18 @@ export class ToolRegistry {
         logger.debug(`[Registry] List — ${tools.length} tool(s) registered`);
         return tools;
     }
+
+    /**
+     * All tools when `allowedNames` is undefined; otherwise only the tools
+     * whose name is in `allowedNames`. Unknown names are simply ignored.
+     */
+    listFiltered(allowedNames?: string[]): Tool[] {
+        if (allowedNames === undefined) {
+            return this.list();
+        }
+        const allowed = new Set(allowedNames);
+        const tools = [...this.tools.values()].filter((tool) => allowed.has(tool.name));
+        logger.debug(`[Registry] List filtered — ${tools.length}/${this.tools.size} tool(s) exposed`);
+        return tools;
+    }
 }

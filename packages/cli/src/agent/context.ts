@@ -330,7 +330,7 @@ export class ContextBuilder {
         logger.debug("ContextBuilder constructed");
     }
 
-    async build(sessionId: string, memoryContext?: string): Promise<ContextType> {
+    async build(sessionId: string, memoryContext?: string, allowedTools?: string[], resolvedUserInput?: string): Promise<ContextType> {
         logger.debug(`[ContextBuilder] Building context for session=${sessionId}`);
 
         const session = this.sessionManager.get(sessionId);
@@ -357,8 +357,22 @@ export class ContextBuilder {
             `(${rawMessages.length} raw — ${rawMessages.length - messages.length} compressed)`
         );
 
-        // Map internal Tool → Groq's ChatCompletionTool shape
-        const toolList = this.toolRegistry.list();
+        // Slash commands: stored history keeps the original raw input (e.g. "/review")
+        // while the model must receive the resolved prompt. Substitute the last user
+        // message in the context window only — never mutate the stored history.
+        let modelMessages = messages;
+        if (resolvedUserInput !== undefined) {
+            const last = messages[messages.length - 1];
+            if (last && last.role === "user") {
+                modelMessages = [...messages.slice(0, -1), { ...last, content: resolvedUserInput }];
+            }
+        }
+
+        // Map internal Tool → Groq's ChatCompletionTool shape.
+        // Tool restrictions are enforced here: restricted tools are not merely
+        // "discouraged" in the prompt, they are excluded from the tool list the
+        // model actually receives.
+        const toolList = this.toolRegistry.listFiltered(allowedTools);
         const tools: Groq.Chat.Completions.ChatCompletionTool[] = toolList
             .map((tool) => ({
                 type: "function" as const,
@@ -373,12 +387,12 @@ export class ContextBuilder {
         if (memoryContext) {
             resolvedSystemPrompt = `${systemPrompt}\n\n${memoryContext}`;
         }
-        logger.debug(`[ContextBuilder] Context ready — ${messages.length} messages, ${tools.length} tools`);
+        logger.debug(`[ContextBuilder] Context ready — ${modelMessages.length} messages, ${tools.length} tools`);
 
         return {
             sessionId,
             model: session.model,
-            messages,
+            messages: modelMessages,
             tools,
             systemPrompt: resolvedSystemPrompt,
         };

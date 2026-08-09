@@ -1,4 +1,5 @@
 import type { ContextBuilder } from "./context";
+import type { CommandRegistry } from "./commands";
 import type { MessageManager } from "./messages";
 import type { ToolRegistry } from "./registry";
 import type { SessionManager } from "./session";
@@ -20,6 +21,7 @@ export class AgentHarness {
         public episodicMemoryManager: EpisodicMemoryManager,
         public semanticMemoryManager: SemanticMemoryManager,
         public proceduralMemoryManager: ProceduralMemoryManager,
+        public commandRegistry: CommandRegistry,
     ) {
         logger.debug("AgentHarness constructed");
     }

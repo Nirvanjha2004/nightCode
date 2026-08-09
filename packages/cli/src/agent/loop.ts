@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentHarness } from "./agent-harness";
 import type { ConfirmHook, ToolCall } from "./types";
+import { resolveSlashCommand } from "./commands";
 import { logger } from "../logger";
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { markSpanError, tracer } from "../telemetry";
@@ -25,6 +26,26 @@ export class AgentLoop {
                     userInput: userInput.slice(0, 200),
                 });
 
+                // Step 0: Resolve slash commands — pure input transformation + optional
+                // tool scope. No new execution path: the resolved prompt flows through the
+                // existing AgentLoop. The ORIGINAL raw input is stored in message history;
+                // the model receives the resolved prompt via context substitution below.
+                // Unknown `/foo` commands pass through unchanged as normal messages.
+                const { resolvedInput, activeCommand } = resolveSlashCommand(userInput, this.harness.commandRegistry);
+
+                if (userInput.startsWith("/")) {
+                    logger.info(`[CommandRegistry] Slash command resolved`, {
+                        "command.name": activeCommand?.name ?? userInput.slice(1).split(" ")[0],
+                        "command.found": activeCommand !== undefined,
+                        "command.allowed_tools": activeCommand?.allowedTools?.join(",") ?? "",
+                    });
+                }
+                if (activeCommand) {
+                    span.setAttribute("command.name", activeCommand.name);
+                    span.setAttribute("command.found", true);
+                    span.setAttribute("command.allowed_tools", activeCommand.allowedTools?.join(",") ?? "");
+                }
+
                 // Step 1: Store user message
                 this.harness.messageManager.add({
                     sessionId,
@@ -38,7 +59,7 @@ export class AgentLoop {
                 // Step 1.5: Build memory context ONCE per user turn (not per iteration)
                 let memoryContext = "";
                 try {
-                    memoryContext = await this.harness.buildMemoryContext(userInput);
+                    memoryContext = await this.harness.buildMemoryContext(resolvedInput);
                     logger.debug(`[AgentLoop] Memory context built (len=${memoryContext.length})`);
                 } catch (err) {
                     logger.error(`[AgentLoop] Failed to build memory context: ${err instanceof Error ? err.message : String(err)}`, {
@@ -63,7 +84,16 @@ export class AgentLoop {
                                     async (ctxSpan) => {
                                         try {
                                             ctxSpan.addEvent("Building context");
-                                            const built = await this.harness.contextBuilder.build(sessionId, memoryContext);
+                                            // allowedTools (from the active slash command) stays in effect for
+                                            // EVERY context rebuild of this turn, across all ReAct iterations.
+                                            // resolvedInput is substituted for the last user message inside
+                                            // the context builder, so the model sees the expanded prompt.
+                                            const built = await this.harness.contextBuilder.build(
+                                                sessionId,
+                                                memoryContext,
+                                                activeCommand?.allowedTools,
+                                                resolvedInput
+                                            );
                                             ctxSpan.setAttribute("context.messages", built.messages.length);
                                             ctxSpan.setAttribute("context.tools", built.tools.length);
                                             ctxSpan.setAttribute("context.system_prompt.length", built.systemPrompt.length);
