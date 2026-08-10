@@ -39,14 +39,18 @@ export class GroqClient implements LLMClient {
         logger.info("[GroqClient] Initialized");
     }
 
-    async chat(context: ContextType): Promise<LLMResponse> {
+    async chat(context: ContextType, signal?: AbortSignal): Promise<LLMResponse> {
         logger.info(
             `[GroqClient] Chat request | model=${context.model} | messages=${context.messages.length} | tools=${context.tools.length}`
         );
 
         try {
-            return await this.callGroq(context);
+            return await this.callGroq(context, "auto", signal);
         } catch (err: any) {
+            // Cancellation via AbortSignal is NOT an API failure — surface it
+            // untouched (no retry, no repair prompt, no error log).
+            if (signal?.aborted) throw err;
+
             const code = getGroqErrorCode(err);
 
             logger.error(
@@ -68,11 +72,17 @@ export class GroqClient implements LLMClient {
                         ? `\n\nYour previous response was rejected because it used an invalid tool-call format. You wrote:\n${failedGeneration.slice(0, 1500)}`
                         : "";
 
-                    return await this.callGroq({
-                        ...context,
-                        systemPrompt: context.systemPrompt + REPAIR_PROMPT + feedback,
-                    });
+                    return await this.callGroq(
+                        {
+                            ...context,
+                            systemPrompt: context.systemPrompt + REPAIR_PROMPT + feedback,
+                        },
+                        "auto",
+                        signal
+                    );
                 } catch (repairErr: any) {
+                    if (signal?.aborted) throw repairErr;
+
                     const repairCode = getGroqErrorCode(repairErr);
 
                     if (repairCode === "tool_use_failed") {
@@ -89,7 +99,8 @@ export class GroqClient implements LLMClient {
                                     context.systemPrompt +
                                     `\n\nIMPORTANT:\nTool calling is currently unavailable. Answer the user's request directly in plain text based on the conversation so far.`,
                             },
-                            "none" // explicit: no tool calls allowed, plain text only
+                            "none", // explicit: no tool calls allowed, plain text only
+                            signal
                         );
                     }
 
@@ -103,7 +114,8 @@ export class GroqClient implements LLMClient {
 
     private async callGroq(
         context: ContextType,
-        toolChoice: "auto" | "none" = "auto"
+        toolChoice: "auto" | "none" = "auto",
+        signal?: AbortSignal
     ): Promise<LLMResponse> {
         return tracer.startActiveSpan("llm.call", async (llmSpan): Promise<LLMResponse> => {
             try {
@@ -182,7 +194,7 @@ export class GroqClient implements LLMClient {
                             };
                         }),
                     ],
-                });
+                }, { signal });
 
                 const elapsed = Date.now() - started;
 

@@ -9,14 +9,64 @@ import {
     copyFile,
 } from "node:fs/promises";
 import { exec, spawn } from "node:child_process";
-import { promisify } from "node:util";
+import type { ChildProcess } from "node:child_process";
 
 import { glob } from "glob";
+import { CancelledError } from "./types";
 import type { Tool } from "./types";
 import { logger } from "../logger";
 import os from "node:os";
 
-const execAsync = promisify(exec);
+// Kills a running child process when the run is cancelled. On Windows a plain
+// `child.kill()` only terminates the shell, orphaning any grandchild command
+// (e.g. `npm test` under powershell), so the whole tree goes via taskkill.
+// ponytail: on POSIX the direct child (the shell) is killed but not its
+// grandchildren (a `sleep` under bash survives) — same ceiling as the existing
+// exec-timeout kill. A full tree kill there needs `detached` + kill(-pid);
+// not done to avoid changing shell/process-group semantics.
+function killProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+    if (os.platform() === "win32" && typeof child.pid === "number") {
+        try {
+            spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+                windowsHide: true,
+            });
+        } catch {
+            // best-effort — the exec timeout remains as a backstop
+        }
+    } else {
+        child.kill(signal);
+    }
+}
+
+// Same contract as Node's promisified exec (resolves {stdout,stderr}, rejects
+// with stdout/stderr attached) plus AbortSignal support: when the signal fires
+// while the command runs, the child process tree is killed and the promise
+// settles via the normal close path.
+function execWithSignal(
+    command: string,
+    options: Parameters<typeof exec>[1],
+    signal?: AbortSignal
+): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+        const onAbort = () => killProcessTree(child, "SIGTERM");
+        const child = exec(command, options, (error, rawStdout, rawStderr) => {
+            signal?.removeEventListener("abort", onAbort);
+            const stdout = typeof rawStdout === "string" ? rawStdout : rawStdout?.toString() ?? "";
+            const stderr = typeof rawStderr === "string" ? rawStderr : rawStderr?.toString() ?? "";
+            if (error) {
+                (error as { stdout?: string }).stdout = stdout;
+                (error as { stderr?: string }).stderr = stderr;
+                reject(error);
+            } else {
+                resolve({ stdout, stderr });
+            }
+        });
+        if (signal) {
+            if (signal.aborted) onAbort();
+            else signal.addEventListener("abort", onAbort, { once: true });
+        }
+    });
+}
 
 
 const shell =
@@ -495,10 +545,12 @@ export function buildRipgrepArgs(args: {
 // Runs a command with an argv array and NO shell — quoting/escaping surprises
 // (spaces, $, backticks, Windows/powershell rules) simply can't happen. Captures
 // combined output with a hard size cap and kills on timeout, mirroring the bash tool.
+// An AbortSignal fires → the child tree is killed and the promise settles.
 function runProcess(
     cmd: string,
     args: string[],
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
 ): Promise<{ code: number; stdout: string; stderr: string; signal: string | null }> {
     return new Promise((resolve) => {
         const child = spawn(cmd, args, { windowsHide: true });
@@ -506,12 +558,18 @@ function runProcess(
         let stderr = "";
         let finished = false;
         const killTimer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-        const finish = (code: number, signal: string | null) => {
+        const onAbort = () => killProcessTree(child, "SIGTERM");
+        const finish = (code: number, sig: string | null) => {
             if (finished) return;
             finished = true;
             clearTimeout(killTimer);
-            resolve({ code, stdout, stderr, signal });
+            signal?.removeEventListener("abort", onAbort);
+            resolve({ code, stdout, stderr, signal: sig });
         };
+        if (signal) {
+            if (signal.aborted) onAbort();
+            else signal.addEventListener("abort", onAbort, { once: true });
+        }
         child.stdout.on("data", (chunk: Buffer) => {
             stdout += chunk.toString();
             if (stdout.length > SHELL_MAX_BUFFER) child.kill("SIGKILL");
@@ -551,7 +609,7 @@ export const grep: Tool = {
         },
         required: ["pattern"],
     },
-    exec: async (args) => {
+    exec: async (args, _harness, signal) => {
         const log = toolLogger("grep");
         log.start(args);
         const start = Date.now();
@@ -561,11 +619,14 @@ export const grep: Tool = {
         }
         const rgArgs = buildRipgrepArgs(args as any);
         try {
-            const { code, stdout, stderr, signal } = await runProcess("rg", rgArgs, SHELL_TIMEOUT_MS);
-            const result = formatShellResult(`rg ${rgArgs.join(" ")}`, stdout, stderr, code, Date.now() - start, signal);
+            const { code, stdout, stderr, signal: sig } = await runProcess("rg", rgArgs, SHELL_TIMEOUT_MS, signal);
+            // Aborted mid-scan → report cancellation, not an empty/killed result.
+            if (signal?.aborted) throw new CancelledError();
+            const result = formatShellResult(`rg ${rgArgs.join(" ")}`, stdout, stderr, code, Date.now() - start, sig);
             log.success(`exit ${code} in ${Date.now() - start}ms`, Date.now() - start);
             return result;
         } catch (err) {
+            if (signal?.aborted) throw new CancelledError();
             log.error(err);
             throw err;
         }
@@ -629,7 +690,7 @@ export const bash: Tool = {
         required: ["command"],
     },
     isDestructive: (args) => isDestructiveCommand(coerceToString((args as any).command)),
-    exec: async (args) => {
+    exec: async (args, _harness, signal) => {
         const log = toolLogger("bash");
         log.start(args);
         const start = Date.now();
@@ -647,16 +708,24 @@ export const bash: Tool = {
 
         try {
             assertNotMemoryPath(command);
-            const { stdout, stderr } = await execAsync(command, {
-                shell,
-                timeout,
-                maxBuffer: SHELL_MAX_BUFFER,
-                windowsHide: true,
-            });
+            const { stdout, stderr } = await execWithSignal(
+                command,
+                {
+                    shell,
+                    timeout,
+                    maxBuffer: SHELL_MAX_BUFFER,
+                    windowsHide: true,
+                },
+                signal
+            );
             const result = formatShellResult(command, stdout, stderr, 0, Date.now() - start);
             log.success(`exit 0 in ${Date.now() - start}ms`, Date.now() - start);
             return result;
         } catch (err) {
+            // Cancellation is not a shell failure — the loop must stop, not
+            // feed a "killed" result back to the model.
+            if (signal?.aborted) throw new CancelledError();
+
             // Non-zero exit is a RESULT, not an exception — the model needs the
             // output to decide the next step. Same for timeouts/killed processes.
             const e = err as { code?: number; signal?: string; stdout?: string; stderr?: string; message?: string };
@@ -807,7 +876,7 @@ export const spawnSubagent: Tool = {
         required: ["task", "allowedTools"],
     },
     destructive: false,
-    exec: async (args, harness) => {
+    exec: async (args, harness, signal) => {
         const log = toolLogger("spawn_subagent");
         log.start(args);
         const start = Date.now();
@@ -848,6 +917,8 @@ export const spawnSubagent: Tool = {
             skipMemoryExtraction: true,
             overrideMemoryContext,
             allowedTools,
+            // Cancelling the parent run also stops the nested subagent.
+            signal,
         });
         log.success(`${result.length} chars`, Date.now() - start);
         return result;

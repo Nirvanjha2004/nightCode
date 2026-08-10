@@ -17,9 +17,12 @@ export class TerminalUI {
         logger.info("TerminalUI.start() — creating CLI renderer");
 
         try {
-            // 1. Create the native CLI renderer instance
+            // 1. Create the native CLI renderer instance.
+            // Ctrl+C is owned by the App's keyboard handler: first press cancels
+            // an active agent run, a second press (or a press while idle) exits
+            // via renderer.destroy() — the same exit path exitOnCtrlC used.
             const renderer = await createCliRenderer({
-                exitOnCtrlC: true,
+                exitOnCtrlC: false,
             });
             logger.debug("CLI renderer created successfully");
 

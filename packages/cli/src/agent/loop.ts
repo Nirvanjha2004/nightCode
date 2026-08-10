@@ -1,10 +1,22 @@
 import { randomUUID } from "node:crypto";
 import type { AgentHarness } from "./agent-harness";
+import { CancelledError } from "./types";
 import type { AgentEvent, ConfirmHook, ToolCall } from "./types";
 import { resolveSlashCommand } from "./commands";
 import { logger } from "../logger";
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { markSpanError, tracer } from "../telemetry";
+
+/**
+ * Throw a CancelledError when the run's AbortSignal has fired. Checked at
+ * every loop boundary (start, iteration top, after the LLM call, before each
+ * tool) so an aborted run stops between steps instead of running more tools.
+ */
+function throwIfAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+        throw new CancelledError();
+    }
+}
 
 /**
  * Per-call options for AgentLoop.execute. All fields optional — a normal
@@ -23,6 +35,8 @@ export interface ExecuteOptions {
     allowedTools?: string[];
     /** UI event stream — emitted as the run progresses (stages, iterations, tool calls). */
     onEvent?: (event: AgentEvent) => void;
+    /** Cancellation signal — Esc / first Ctrl+C aborts the run; the loop stops between steps. */
+    signal?: AbortSignal;
 }
 
 // Tool-call args are trimmed when stored in history so one giant `write`/`bash`
@@ -96,6 +110,9 @@ export class AgentLoop {
                     userInput: userInput.slice(0, 200),
                 });
 
+                // A run that was already cancelled before starting must not touch history.
+                throwIfAborted(options?.signal);
+
                 // Step 0: Resolve slash commands — pure input transformation + optional
                 // tool scope. No new execution path: the resolved prompt flows through the
                 // existing AgentLoop. The ORIGINAL raw input is stored in message history;
@@ -147,6 +164,7 @@ export class AgentLoop {
                 }
 
                 for (let iter = 1; iter <= this.maxIterations; iter++) {
+                    throwIfAborted(options?.signal);
                     logger.info(`[AgentLoop] Iteration ${iter}/${this.maxIterations}`);
                     options?.onEvent?.({ type: "iteration", n: iter, max: this.maxIterations });
 
@@ -206,7 +224,8 @@ export class AgentLoop {
                                 iterSpan.setAttribute("context.tool.count", context.tools.length);
 
                                 // Step 3: LLM call — traced as "llm.call" inside the client
-                                const response = await this.llm.chat(context);
+                                const response = await this.llm.chat(context, options?.signal);
+                                throwIfAborted(options?.signal);
 
                                 iterSpan.addEvent("LLM response received");
                                 iterSpan.setAttribute("llm.response.type", response.type);
@@ -264,7 +283,16 @@ export class AgentLoop {
 
                                     // Execute each tool call
                                     iterSpan.addEvent("Tool execution started");
+                                    let toolCallIndex = 0;
                                     for (const toolCall of toolCalls) {
+                                        // Stop before running any NEW tool after cancellation — but keep
+                                        // history valid: every id in the stored assistant intent still gets
+                                        // a role:"tool" response, so the next prompt isn't rejected for
+                                        // orphaned tool_calls.
+                                        if (options?.signal?.aborted) {
+                                            this.storeCancelledToolResults(sessionId, toolCalls.slice(toolCallIndex));
+                                            throwIfAborted(options?.signal);
+                                        }
                                         let result = "";
                                         let toolOk = true;
                                         const startTime = Date.now();
@@ -329,7 +357,7 @@ export class AgentLoop {
                                                         toolName: toolCall.name,
                                                         argsPreview: previewToolArgs(toolCall.name, toolCall.args),
                                                     });
-                                                    const execResult = await tool.exec(toolCall.args, this.harness);
+                                                    const execResult = await tool.exec(toolCall.args, this.harness, options?.signal);
                                                     result = typeof execResult === "string" ? execResult : JSON.stringify(execResult);
                                                     const elapsed = Date.now() - startTime;
                                                     logger.info(`[AgentLoop] Tool "${toolCall.name}" completed in ${elapsed}ms`, {
@@ -339,14 +367,24 @@ export class AgentLoop {
                                                     toolSpan.setAttribute("tool.result.length", result.length);
                                                     toolSpan.addEvent("Tool finished");
                                                 } catch (err) {
+                                                    // Cancellation is not a tool failure: the in-flight tool's result is
+                                                    // still stored (history must keep its assistant-tool_calls → tool
+                                                    // pairing, or the next prompt would fail), then the next loop
+                                                    // boundary throws CancelledError and stops the run.
+                                                    const aborted = options?.signal?.aborted === true;
                                                     const errMsg = err instanceof Error ? err.message : String(err);
-                                                    logger.error(`[AgentLoop] Tool "${toolCall.name}" threw: ${errMsg}`, {
-                                                        stack: err instanceof Error ? err.stack : undefined,
-                                                    });
-                                                    result = `Error: ${errMsg}`;
+                                                    if (aborted) {
+                                                        logger.info(`[AgentLoop] Tool "${toolCall.name}" cancelled by user`);
+                                                        result = "⚠ Tool execution cancelled — the agent run was interrupted.";
+                                                    } else {
+                                                        logger.error(`[AgentLoop] Tool "${toolCall.name}" threw: ${errMsg}`, {
+                                                            stack: err instanceof Error ? err.stack : undefined,
+                                                        });
+                                                        result = `Error: ${errMsg}`;
+                                                    }
                                                     toolOk = false;
-                                                    markSpanError(toolSpan, err);
-                                                    toolSpan.addEvent("Tool threw exception");
+                                                    markSpanError(toolSpan, aborted ? new CancelledError() : err);
+                                                    toolSpan.addEvent(aborted ? "Tool cancelled by user" : "Tool threw exception");
                                                     toolSpan.setAttribute("tool.success", false);
                                                     toolSpan.setAttribute("tool.result.length", result.length);
                                                 } finally {
@@ -378,6 +416,7 @@ export class AgentLoop {
                                             messageId: randomUUID(),
                                         });
                                         logger.debug(`[AgentLoop] Tool result stored for ${toolCall.name} (id=${toolCall.id})`);
+                                        toolCallIndex++;
                                     }
                                     iterSpan.addEvent("Tool execution finished");
                                 }
@@ -400,6 +439,7 @@ export class AgentLoop {
                 }
 
                 // Max iterations reached without a final answer
+                throwIfAborted(options?.signal);
                 logger.error(`[AgentLoop] Reached max iterations (${this.maxIterations}) without resolution`);
                 span.addEvent("Maximum iterations reached");
 
@@ -417,6 +457,23 @@ export class AgentLoop {
                 span.end();
             }
         });
+    }
+
+    // When a run is cancelled mid-batch, every tool_call id in the already-stored
+    // assistant intent must still receive a role:"tool" response — otherwise the
+    // next prompt would be rejected for orphaned tool_calls. Synthetic cancelled
+    // results fill in for calls that never ran.
+    private storeCancelledToolResults(sessionId: string, toolCalls: ToolCall[]): void {
+        for (const tc of toolCalls) {
+            this.harness.messageManager.add({
+                sessionId,
+                role: "tool",
+                content: "⚠ Tool execution cancelled — the agent run was interrupted.",
+                toolCallId: tc.id,
+                createdAt: new Date(),
+                messageId: randomUUID(),
+            });
+        }
     }
 
     // --- Fire-and-forget memory extraction; failures are logged, never thrown ---

@@ -28,9 +28,29 @@ export type Tool = {
      * Optional for backward compatibility with tools that don't need it
      * (and with direct calls in self-checks) — a tool that DOES need it
      * must guard against it being undefined.
+     * Third param is the run's AbortSignal (same run for nested subagents);
+     * child-process tools (bash, grep) use it to kill their process on cancel.
      */
-    exec: (args: Record<string, unknown>, harness?: AgentHarness) => Promise<unknown>;
+    exec: (
+        args: Record<string, unknown>,
+        harness?: AgentHarness,
+        signal?: AbortSignal
+    ) => Promise<unknown>;
 };
+
+/**
+ * Thrown when an agent run is cancelled via its AbortSignal. Named "AbortError"
+ * (the standard name for aborted operations) so callers can detect cancellation
+ * uniformly via `err.name === "AbortError"` — the same way native fetch reports
+ * an aborted request. Cancellation is NOT an error: the UI renders it as
+ * "⚠ Cancelled", never as an ERROR row.
+ */
+export class CancelledError extends Error {
+    constructor(message = "Agent run cancelled.") {
+        super(message);
+        this.name = "AbortError";
+    }
+}
 
 /**
  * A hook the UI provides to let the agent loop pause and ask the user
@@ -132,7 +152,8 @@ export type AgentEvent =
     | { type: "stage"; name: string }
     | { type: "iteration"; n: number; max: number }
     | { type: "tool_start"; toolName: string; argsPreview: string }
-    | { type: "tool_end"; toolName: string; ok: boolean; durationMs: number; resultPreview: string };
+    | { type: "tool_end"; toolName: string; ok: boolean; durationMs: number; resultPreview: string }
+    | { type: "cancelled" };
 
 // Message types
 export type MessageType = {

@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Header } from "../components/header";
 import { InputBar } from "../components/input-bar";
 import { TextAttributes } from "@opentui/core";
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard, useRenderer } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import "./telemetry";
 import type { AgentLoop } from "../src/agent/loop";
@@ -130,6 +130,10 @@ const STAGE_LABELS: Record<string, string> = {
     extract: "saving memories",
 };
 
+// A second cancellation within this window exits the app (^C^C), mirroring the
+// old Ctrl+C-exits-everything behavior without killing the process mid-run.
+const CANCEL_TO_EXIT_MS = 2000;
+
 function StageRow({ name }: { name: string }) {
     return (
         <text fg={C.overlay1} attributes={TextAttributes.DIM}>
@@ -230,6 +234,11 @@ export function App({ sessionId, agentLoop, commands }: Props) {
     const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
     const pendingRef = useRef(pendingConfirm);
     pendingRef.current = pendingConfirm;
+    const loadingRef = useRef(loading);
+    loadingRef.current = loading;
+    const abortRef = useRef<AbortController | null>(null);
+    const lastCancelTsRef = useRef(0);
+    const renderer = useRenderer();
     const scrollRef = useRef<ScrollBoxRenderable | null>(null);
 
     const push = (role: DisplayMessage["role"], content: string) => {
@@ -263,33 +272,95 @@ export function App({ sessionId, agentLoop, commands }: Props) {
             setActivity((prev) => [...prev, event]);
             return;
         }
+        if (event.type === "cancelled") {
+            // A cancelled run may have left a ghost live-tool row — clear it.
+            setLiveTool(null);
+            setActivity((prev) => [...prev, event]);
+            return;
+        }
         setActivity((prev) => [...prev, event]);
     }, []);
 
-    // ── Keyboard handler: intercept Y/N/Esc when confirmation is pending ──
-    // Use ref to avoid stale closures (useKeyboard may capture the handler once)
+    // ── Cancellation ────────────────────────────────────────────────────
+    // Esc or the first Ctrl+C while a run is active cancels it (the run stays
+    // in the same session, input re-enables). Only ^C^C — a second Ctrl+C
+    // within the 2s window — exits the app normally; Esc never advances the
+    // exit window. Ctrl+C while idle also exits (old behavior).
+    const cancelRun = useCallback((fromCtrlC: boolean) => {
+        if (fromCtrlC) {
+            const now = Date.now();
+            if (lastCancelTsRef.current && now - lastCancelTsRef.current <= CANCEL_TO_EXIT_MS) {
+                logger.info("[UI] Double Ctrl+C — exiting");
+                process.nextTick(() => renderer.destroy());
+                return;
+            }
+            lastCancelTsRef.current = now;
+        }
+        logger.info("[UI] Cancelling active agent run");
+        // Unblock a pending destructive-action confirmation so the loop observes
+        // the abort instead of waiting on the dialog forever.
+        pendingRef.current?.resolve(false);
+        setPendingConfirm(null);
+        abortRef.current?.abort();
+    }, [renderer]);
+
+    // ── Keyboard handler ────────────────────────────────────────────────
+    // 1. Confirmation dialog open → Y/N/Esc keep their existing behavior;
+    //    Ctrl+C cancels the whole run (not just the operation).
+    // 2. Otherwise → Esc cancels an active run; Ctrl+C cancels an active run
+    //    (second press within 2s exits) or exits when idle.
+    // Use refs to avoid stale closures (useKeyboard may capture the handler once).
     useKeyboard((keyEvent) => {
         const p = pendingRef.current;
-        if (!p) return;
+        const isCtrlC = keyEvent.ctrl && !keyEvent.shift && keyEvent.name === "c";
 
-        // Y → confirm
-        if (keyEvent.name === "y") {
-            logger.info(`[UI] User confirmed: ${p.toolName}`);
-            p.resolve(true);
-            setPendingConfirm(null);
+        if (p) {
+            // Y → confirm
+            if (keyEvent.name === "y") {
+                logger.info(`[UI] User confirmed: ${p.toolName}`);
+                p.resolve(true);
+                setPendingConfirm(null);
+                keyEvent.preventDefault();
+                keyEvent.stopPropagation();
+                return;
+            }
+
+            // N or Escape → reject
+            if (keyEvent.name === "n" || keyEvent.name === "escape") {
+                logger.info(`[UI] User rejected: ${p.toolName}`);
+                p.resolve(false);
+                setPendingConfirm(null);
+                keyEvent.preventDefault();
+                keyEvent.stopPropagation();
+                return;
+            }
+
+            // Ctrl+C while a confirmation is up → cancel the run itself.
+            if (isCtrlC) {
+                cancelRun(true);
+                keyEvent.preventDefault();
+                keyEvent.stopPropagation();
+            }
+            return;
+        }
+
+        // ── Cancellation keys (no dialog open) ──
+        if (isCtrlC) {
+            if (loadingRef.current) {
+                cancelRun(true);
+            } else {
+                logger.info("[UI] Ctrl+C while idle — exiting");
+                process.nextTick(() => renderer.destroy());
+            }
             keyEvent.preventDefault();
             keyEvent.stopPropagation();
             return;
         }
 
-        // N or Escape → reject
-        if (keyEvent.name === "n" || keyEvent.name === "escape") {
-            logger.info(`[UI] User rejected: ${p.toolName}`);
-            p.resolve(false);
-            setPendingConfirm(null);
+        if (keyEvent.name === "escape" && loadingRef.current) {
+            cancelRun(false);
             keyEvent.preventDefault();
             keyEvent.stopPropagation();
-            return;
         }
     });
 
@@ -309,19 +380,37 @@ export function App({ sessionId, agentLoop, commands }: Props) {
         logger.info(`[UI] User submitted: "${trimmed.slice(0, 100)}"`);
         push("user", trimmed);
         setLoading(true);
+        // A fresh run restarts the ^C^C exit window — Ctrl+C here is the first
+        // press of the new run, not a double-press left over from a prior one.
+        lastCancelTsRef.current = 0;
+        const controller = new AbortController();
+        abortRef.current = controller;
         try {
             const confirmHook = buildConfirmHook();
-            const response = await agentLoop.execute(sessionId, trimmed, { confirmHook, onEvent: handleAgentEvent });
+            const response = await agentLoop.execute(sessionId, trimmed, {
+                confirmHook,
+                onEvent: handleAgentEvent,
+                signal: controller.signal,
+            });
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
         } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            logger.error(`[UI] Agent execution failed: ${errMsg}`, {
-                stack: err instanceof Error ? err.stack : undefined,
-            });
             setLiveTool(null); // an aborted run may have left a ghost tool row
-            push("error", errMsg);
+            // Cancellation is NOT an error: the activity feed shows "⚠ Cancelled",
+            // and the session stays usable for the next prompt.
+            if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+                logger.info("[UI] Agent run cancelled");
+                handleAgentEvent({ type: "cancelled" });
+            } else {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                logger.error(`[UI] Agent execution failed: ${errMsg}`, {
+                    stack: err instanceof Error ? err.stack : undefined,
+                });
+                push("error", errMsg);
+            }
         } finally {
+            // A finished run can no longer be cancelled by a late keypress.
+            abortRef.current = null;
             setLoading(false);
         }
     }, [loading, sessionId, agentLoop, buildConfirmHook, handleAgentEvent]);
@@ -384,6 +473,13 @@ export function App({ sessionId, agentLoop, commands }: Props) {
                             if (event.type === "stage") return <StageRow key={i} name={event.name} />;
                             if (event.type === "iteration") return <IterationRow key={i} n={event.n} max={event.max} />;
                             if (event.type === "tool_end") return <ToolEndRow key={i} event={event} />;
+                            if (event.type === "cancelled") {
+                                return (
+                                    <text fg={C.yellow} attributes={TextAttributes.BOLD}>
+                                        ⚠ Cancelled
+                                    </text>
+                                );
+                            }
                             return null;
                         })}
                         {liveTool && (
