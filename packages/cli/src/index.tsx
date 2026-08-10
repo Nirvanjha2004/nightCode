@@ -6,7 +6,7 @@ import { useKeyboard } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import "./telemetry";
 import type { AgentLoop } from "../src/agent/loop";
-import type { ConfirmHook } from "./agent/types";
+import type { AgentEvent, ConfirmHook } from "./agent/types";
 import type { Command } from "../components/commands-menu/types";
 import { logger } from "./logger";
 // Display-only — agent context lives in backend MessageManager, not here
@@ -124,6 +124,43 @@ function ThinkingIndicator() {
     );
 }
 
+// ── Agent activity feed — shows what the loop is doing (Issue #1) ─────────────
+const STAGE_LABELS: Record<string, string> = {
+    memory: "loading memory",
+    extract: "saving memories",
+};
+
+function StageRow({ name }: { name: string }) {
+    return (
+        <text fg={C.overlay1} attributes={TextAttributes.DIM}>
+            · {STAGE_LABELS[name] ?? name}
+        </text>
+    );
+}
+
+function IterationRow({ n, max }: { n: number; max: number }) {
+    return (
+        <text fg={C.overlay1} attributes={TextAttributes.DIM}>
+            · iter {n}/{max}
+        </text>
+    );
+}
+
+function ToolEndRow({ event }: { event: Extract<AgentEvent, { type: "tool_end" }> }) {
+    return (
+        <box flexDirection="column">
+            <text fg={event.ok ? C.green : C.red} attributes={event.ok ? undefined : TextAttributes.BOLD}>
+                {event.ok ? "✓" : "✗"} {event.toolName} · {(event.durationMs / 1000).toFixed(1)}s
+            </text>
+            {event.resultPreview && (
+                <text fg={C.subtitle} attributes={TextAttributes.DIM} wrapMode="word">
+                    {event.resultPreview}
+                </text>
+            )}
+        </box>
+    );
+}
+
 // ── Message bubble component ───────────────────────────────────────────────────
 function MessageBubble({ msg }: { msg: DisplayMessage }) {
     const cfg = ROLE_CONFIG[msg.role];
@@ -202,6 +239,33 @@ export function App({ sessionId, agentLoop, commands }: Props) {
         ]);
     };
 
+    // ── Agent activity feed ──────────────────────────────────────────
+    const [activity, setActivity] = useState<AgentEvent[]>([]);
+    const [liveTool, setLiveTool] = useState<{ toolName: string; argsPreview: string; startedAt: number } | null>(null);
+    const [liveElapsed, setLiveElapsed] = useState(0);
+
+    // Tick the live tool row's elapsed counter once a second.
+    useEffect(() => {
+        if (!liveTool) return;
+        const t = setInterval(() => setLiveElapsed(Math.floor((Date.now() - liveTool.startedAt) / 1000)), 1000);
+        return () => clearInterval(t);
+    }, [liveTool]);
+
+    // Stream events from the loop into the feed. tool_start becomes the live
+    // row (tools run sequentially, so at most one is live); tool_end finalizes it.
+    const handleAgentEvent = useCallback((event: AgentEvent) => {
+        if (event.type === "tool_start") {
+            setLiveTool({ toolName: event.toolName, argsPreview: event.argsPreview, startedAt: Date.now() });
+            return;
+        }
+        if (event.type === "tool_end") {
+            setLiveTool(null);
+            setActivity((prev) => [...prev, event]);
+            return;
+        }
+        setActivity((prev) => [...prev, event]);
+    }, []);
+
     // ── Keyboard handler: intercept Y/N/Esc when confirmation is pending ──
     // Use ref to avoid stale closures (useKeyboard may capture the handler once)
     useKeyboard((keyEvent) => {
@@ -247,7 +311,7 @@ export function App({ sessionId, agentLoop, commands }: Props) {
         setLoading(true);
         try {
             const confirmHook = buildConfirmHook();
-            const response = await agentLoop.execute(sessionId, trimmed, { confirmHook });
+            const response = await agentLoop.execute(sessionId, trimmed, { confirmHook, onEvent: handleAgentEvent });
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
         } catch (err) {
@@ -255,11 +319,12 @@ export function App({ sessionId, agentLoop, commands }: Props) {
             logger.error(`[UI] Agent execution failed: ${errMsg}`, {
                 stack: err instanceof Error ? err.stack : undefined,
             });
+            setLiveTool(null); // an aborted run may have left a ghost tool row
             push("error", errMsg);
         } finally {
             setLoading(false);
         }
-    }, [loading, sessionId, agentLoop, buildConfirmHook]);
+    }, [loading, sessionId, agentLoop, buildConfirmHook, handleAgentEvent]);
 
     return (
         <box
@@ -313,7 +378,28 @@ export function App({ sessionId, agentLoop, commands }: Props) {
                     </box>
                 ))}
 
-                {loading && (
+                {activity.length > 0 && (
+                    <box paddingX={2} flexDirection="column" marginBottom={1}>
+                        {activity.map((event, i) => {
+                            if (event.type === "stage") return <StageRow key={i} name={event.name} />;
+                            if (event.type === "iteration") return <IterationRow key={i} n={event.n} max={event.max} />;
+                            if (event.type === "tool_end") return <ToolEndRow key={i} event={event} />;
+                            return null;
+                        })}
+                        {liveTool && (
+                            <box flexDirection="row" gap={1}>
+                                <text fg={C.yellow} attributes={TextAttributes.DIM}>
+                                    →
+                                </text>
+                                <text fg={C.yellow} attributes={TextAttributes.DIM} wrapMode="word">
+                                    {liveTool.toolName} {liveTool.argsPreview} · {liveElapsed}s
+                                </text>
+                            </box>
+                        )}
+                    </box>
+                )}
+
+                {loading && !liveTool && (
                     <box paddingX={2} marginBottom={1}>
                         <ThinkingIndicator />
                     </box>

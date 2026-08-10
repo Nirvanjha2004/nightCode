@@ -7,23 +7,23 @@
     "assistant": {
       "tools": "read, write, append, edit, delete, mkdir, ls, glob, find, grep, rename, copy, bash, todoWrite"
     },
-    "name": "nirvan jha",
+    "name": "Nirvan",
     "institution": "iiitdm kancheepuram"
   },
   "assistant": {
     "response": "unknown command",
-    "context": "Git, database, custom/IDE-specific, AI agent slash command"
+    "context": "Git, database, custom/IDE-specific, AI agent slash command",
+    "design": "terminal-based AI coding agent"
   },
-  "tools": {
-    "checked": "grep, ls, bash"
-  },
+  "tools": "File Operations, Directory & Search, Execution, Planning, Delegation",
   "available_tools": "['read', 'write', 'append', 'edit', 'delete', 'mkdir', 'ls', 'glob', 'find', 'grep', 'rename', 'copy', 'bash', 'todoWrite']",
   "slash_commands": "not supported",
   "interface": "direct tool calls",
   "supported_actions": "read file, edit/write files, run shell commands, search code, manage directories",
   "default_tool": "bash",
   "tool": {
-    "support": "direct tool calls"
+    "support": "direct tool calls",
+    "interface": "direct tool calls"
   },
   "git": {
     "commit": {

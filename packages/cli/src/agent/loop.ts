@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentHarness } from "./agent-harness";
-import type { ConfirmHook, ToolCall } from "./types";
+import type { AgentEvent, ConfirmHook, ToolCall } from "./types";
 import { resolveSlashCommand } from "./commands";
 import { logger } from "../logger";
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
@@ -21,6 +21,8 @@ export interface ExecuteOptions {
     overrideMemoryContext?: string;
     /** Tool scope for this turn; overrides any slash-command allowed-tools. */
     allowedTools?: string[];
+    /** UI event stream — emitted as the run progresses (stages, iterations, tool calls). */
+    onEvent?: (event: AgentEvent) => void;
 }
 
 // Tool-call args are trimmed when stored in history so one giant `write`/`bash`
@@ -37,6 +39,40 @@ function trimToolCallArgsForHistory(toolCalls: ToolCall[]): ToolCall[] {
         }
         return { ...tc, args: trimmedArgs };
     });
+}
+
+// UI previews for the activity feed — keep what reaches the renderer tiny:
+// short JSON head for args, a few lines for results (a multi-MB bash log must
+// never round-trip through React state).
+const PREVIEW_ARGS_MAX = 100;
+const PREVIEW_RESULT_MAX = 400;
+const PREVIEW_RESULT_LINES = 5;
+
+export function previewToolArgs(toolName: string, args: Record<string, unknown>): string {
+    // bash: the command itself is the signal — show it, not its JSON wrapper.
+    if (toolName === "bash" && typeof args.command === "string") {
+        const cmd = args.command;
+        return cmd.length > PREVIEW_ARGS_MAX ? cmd.slice(0, PREVIEW_ARGS_MAX) + "…" : cmd;
+    }
+    const s = JSON.stringify(args);
+    return s.length > PREVIEW_ARGS_MAX ? s.slice(0, PREVIEW_ARGS_MAX) + "…" : s;
+}
+
+export function previewToolResult(result: string): string {
+    // Only the head is ever shown — bound the scan so a multi-MB bash log is
+    // never fully copied or split into a line array on the loop's hot path.
+    const truncated = result.length > PREVIEW_RESULT_MAX + 5000;
+    const head = result.slice(0, PREVIEW_RESULT_MAX + 5000).replace(/\r\n/g, "\n");
+    const lines = head.split("\n");
+    let out = lines.slice(0, PREVIEW_RESULT_LINES).join("\n");
+    // Cap the content BEFORE the marker so the truncation note always survives.
+    if (out.length > PREVIEW_RESULT_MAX) out = out.slice(0, PREVIEW_RESULT_MAX) + "…";
+    if (truncated) {
+        out += "\n… (output truncated)";
+    } else if (lines.length > PREVIEW_RESULT_LINES) {
+        out += `\n… (${lines.length - PREVIEW_RESULT_LINES} more lines)`;
+    }
+    return out;
 }
 
 export class AgentLoop {
@@ -99,6 +135,7 @@ export class AgentLoop {
                     logger.debug(`[AgentLoop] Memory context overridden (len=${memoryContext.length})`);
                 } else {
                     try {
+                        options?.onEvent?.({ type: "stage", name: "memory" });
                         memoryContext = await this.harness.buildMemoryContext(resolvedInput);
                         logger.debug(`[AgentLoop] Memory context built (len=${memoryContext.length})`);
                     } catch (err) {
@@ -111,6 +148,7 @@ export class AgentLoop {
 
                 for (let iter = 1; iter <= this.maxIterations; iter++) {
                     logger.info(`[AgentLoop] Iteration ${iter}/${this.maxIterations}`);
+                    options?.onEvent?.({ type: "iteration", n: iter, max: this.maxIterations });
 
                     const iteration = await tracer.startActiveSpan(
                         `iteration_${iter}`,
@@ -191,7 +229,7 @@ export class AgentLoop {
                                     // Fire memory extraction in the background — do not block the response
                                     // Subagents skip extraction entirely (no duplicate memory writes).
                                     if (!options?.skipMemoryExtraction) {
-                                        this.saveMemoryAsync(sessionId, span);
+                                        this.saveMemoryAsync(sessionId, span, options);
                                     }
 
                                     iterSpan.addEvent("Iteration completed");
@@ -228,6 +266,7 @@ export class AgentLoop {
                                     iterSpan.addEvent("Tool execution started");
                                     for (const toolCall of toolCalls) {
                                         let result = "";
+                                        let toolOk = true;
                                         const startTime = Date.now();
 
                                         await tracer.startActiveSpan(
@@ -243,6 +282,7 @@ export class AgentLoop {
                                                     if (!tool) {
                                                         logger.warn(`[AgentLoop] Tool "${toolCall.name}" not registered`);
                                                         result = `Error: Tool "${toolCall.name}" is not registered.`;
+                                                        toolOk = false;
                                                         toolSpan.setAttribute("tool.success", false);
                                                         toolSpan.setAttribute("tool.result.length", result.length);
                                                         toolSpan.setStatus({
@@ -271,6 +311,7 @@ export class AgentLoop {
                                                         if (!confirmed) {
                                                             logger.info(`[AgentLoop] ✋ User rejected ${toolCall.name}`);
                                                             result = `User rejected the ${toolCall.name} operation. Inform them and do not retry unless asked.`;
+                                                            toolOk = false;
                                                             const elapsed = Date.now() - startTime;
                                                             logger.info(`[AgentLoop] Tool "${toolCall.name}" skipped (user rejected) in ${elapsed}ms`);
                                                             toolSpan.addEvent("Tool rejected by user");
@@ -283,6 +324,11 @@ export class AgentLoop {
 
                                                     logger.debug(`[AgentLoop] Executing tool: ${toolCall.name}`, { args: toolCall.args });
                                                     // Pass the harness so tools (e.g. spawn_subagent) can call back into the loop.
+                                                    options?.onEvent?.({
+                                                        type: "tool_start",
+                                                        toolName: toolCall.name,
+                                                        argsPreview: previewToolArgs(toolCall.name, toolCall.args),
+                                                    });
                                                     const execResult = await tool.exec(toolCall.args, this.harness);
                                                     result = typeof execResult === "string" ? execResult : JSON.stringify(execResult);
                                                     const elapsed = Date.now() - startTime;
@@ -298,6 +344,7 @@ export class AgentLoop {
                                                         stack: err instanceof Error ? err.stack : undefined,
                                                     });
                                                     result = `Error: ${errMsg}`;
+                                                    toolOk = false;
                                                     markSpanError(toolSpan, err);
                                                     toolSpan.addEvent("Tool threw exception");
                                                     toolSpan.setAttribute("tool.success", false);
@@ -308,6 +355,14 @@ export class AgentLoop {
                                                 }
                                             }
                                         );
+
+                                        options?.onEvent?.({
+                                            type: "tool_end",
+                                            toolName: toolCall.name,
+                                            ok: toolOk,
+                                            durationMs: Date.now() - startTime,
+                                            resultPreview: previewToolResult(result),
+                                        });
 
                                         // Store the tool RESULT back into history (role:"tool", linked
                                         // to the assistant intent via toolCallId). This is what the model
@@ -350,7 +405,7 @@ export class AgentLoop {
 
                 // Still worth extracting — e.g. to learn a "gets stuck on X" procedural pattern
                 if (!options?.skipMemoryExtraction) {
-                    this.saveMemoryAsync(sessionId, span);
+                    this.saveMemoryAsync(sessionId, span, options);
                 }
 
                 throw new Error("Reached maximum loop iterations.");
@@ -368,7 +423,8 @@ export class AgentLoop {
     // Note: extraction is deliberately not awaited (it must not block the response), so
     // the agent.execute span usually ends before the promise resolves and the
     // "Memory extraction finished" event below lands only if the span is still recording.
-    private saveMemoryAsync(sessionId: string, span: Span): void {
+    private saveMemoryAsync(sessionId: string, span: Span, options?: ExecuteOptions): void {
+        options?.onEvent?.({ type: "stage", name: "extract" });
         span.addEvent("Memory extraction started");
         let trace: string;
         try {

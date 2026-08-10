@@ -13,3 +13,6 @@
 13. [spawn_subagent] Request user confirmation for write access before spawning subagent
 14. [spawn_subagent] always confirm write access before spawning a subagent
 15. [git commit] use git add and git commit separately to avoid errors
+16. [user input] Use plain language to invoke tools
+17. [user preference] use plain language for tool calls
+18. [contextual ambiguity] ask clarifying questions when needed

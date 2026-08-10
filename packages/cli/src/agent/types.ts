@@ -124,6 +124,16 @@ export type ToolCall = {
     args: Record<string, unknown>; // unknown > string, args can be numbers/booleans/nested too
 };
 
+/**
+ * UI-facing progress events streamed from AgentLoop to the terminal via
+ * ExecuteOptions.onEvent. Display-only — never stored in message history.
+ */
+export type AgentEvent =
+    | { type: "stage"; name: string }
+    | { type: "iteration"; n: number; max: number }
+    | { type: "tool_start"; toolName: string; argsPreview: string }
+    | { type: "tool_end"; toolName: string; ok: boolean; durationMs: number; resultPreview: string };
+
 // Message types
 export type MessageType = {
     messageId: string;
