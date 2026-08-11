@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 
 import type { LLMClient } from "./client";
+import { CancelledError } from "../agent/types";
 import type { ContextType } from "../agent/types";
 import type { LLMResponse } from "./types";
 
@@ -49,7 +50,11 @@ export class GroqClient implements LLMClient {
         } catch (err: any) {
             // Cancellation via AbortSignal is NOT an API failure — surface it
             // untouched (no retry, no repair prompt, no error log).
-            if (signal?.aborted) throw err;
+            if (signal?.aborted) {
+                // If the SDK aborted the underlying fetch, this fires within ms;
+                // a large elapsed here means the abort never reached the request.
+                throw err;
+            }
 
             const code = getGroqErrorCode(err);
 
@@ -81,7 +86,9 @@ export class GroqClient implements LLMClient {
                         signal
                     );
                 } catch (repairErr: any) {
-                    if (signal?.aborted) throw repairErr;
+                    if (signal?.aborted) {
+                        throw repairErr;
+                    }
 
                     const repairCode = getGroqErrorCode(repairErr);
 
@@ -118,6 +125,20 @@ export class GroqClient implements LLMClient {
         signal?: AbortSignal
     ): Promise<LLMResponse> {
         return tracer.startActiveSpan("llm.call", async (llmSpan): Promise<LLMResponse> => {
+            // Cancel-latency bisect: (1) prove the abort EVENT is delivered to the
+            // request options (the SDK's own listener fires on the same dispatch),
+            // and (2) separate fetch-rejection time from post-rejection time. A gap
+            // between "SDK abort event delivered" and "fetch rejected" means the
+            // fetch itself held the abort; a gap after "fetch rejected" means
+            // span.end()/markSpanError/logging blocked.
+            const onAbortEvent = () => {
+                console.log("SDK abort event delivered to request options", signal);
+            };
+            if (signal) {
+                if (signal.aborted) onAbortEvent();
+                else signal.addEventListener("abort", onAbortEvent, { once: true });
+            }
+
             try {
                 const started = Date.now();
 
@@ -128,7 +149,7 @@ export class GroqClient implements LLMClient {
                 // max_tokens, so there is no value to attribute.
                 llmSpan.addEvent("Sending request to LLM");
 
-                const response = await this.client.chat.completions.create({
+                const requestPromise = this.client.chat.completions.create({
                     model: context.model,
 
                     tools: context.tools,
@@ -195,6 +216,35 @@ export class GroqClient implements LLMClient {
                         }),
                     ],
                 }, { signal });
+
+                // ── Abort watchdog ──────────────────────────────────────────────
+                // Bun's fetch does not reliably reject an in-flight request when its
+                // AbortSignal fires — measured 7+ seconds of the fetch holding the
+                // abort while the run's signal fired in 2ms. The SDK cannot fix that,
+                // so race the request against a watchdog that rejects the INSTANT the
+                // run's signal fires. Cancellation then settles in ~ms regardless of
+                // the fetch's behavior; the orphaned request settles in the background
+                // and is swallowed below.
+                // ponytail: the orphaned request stays alive until the SDK's 60s
+                // timeout, holding one socket in the background — bounded and
+                // user-invisible; the upgrade path is a hard kill, which the SDK
+                // already partially does by relaying the same signal to the fetch.
+                requestPromise.catch(() => {}); // never surface the orphaned settle
+                let onAbort: (() => void) | undefined;
+                const abortPromise = new Promise<never>((_resolve, reject) => {
+                    onAbort = () => {
+                        reject(new CancelledError());
+                    };
+                    if (signal?.aborted) onAbort();
+                    else signal?.addEventListener("abort", onAbort, { once: true });
+                });
+
+                let response: Awaited<typeof requestPromise>;
+                try {
+                    response = await Promise.race([requestPromise, abortPromise]);
+                } finally {
+                    if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+                }
 
                 const elapsed = Date.now() - started;
 
@@ -275,9 +325,13 @@ export class GroqClient implements LLMClient {
                     content: message.content ?? "",
                 };
             } catch (err) {
+                if (signal?.aborted) {
+                    console.log("llm.call fetch rejected (before span.end)", signal);
+                }
                 markSpanError(llmSpan, err);
                 throw err;
             } finally {
+                signal?.removeEventListener("abort", onAbortEvent);
                 llmSpan.end();
             }
         });
