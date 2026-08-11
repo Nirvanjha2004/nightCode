@@ -236,7 +236,10 @@ async function main() {
         };
         const groqPromise = gc.chat(context, groqController.signal);
         setTimeout(() => groqController.abort(), 20);
-        await assert.rejects(groqPromise, /aborted/i, "aborted LLM request rejects");
+        // Cancellation rejects with CancelledError (name "AbortError", message
+        // "Agent run cancelled.") via the abort watchdog — match by name, the
+        // same convention as the other abort assertions in this file.
+        await assert.rejects(groqPromise, isAbort, "aborted LLM request rejects");
         assert.equal(seenSignal, groqController.signal, "AbortSignal reached the request options");
         assert.equal(createCalls, 1, "aborted request is not retried or repaired");
 

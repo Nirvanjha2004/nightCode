@@ -191,6 +191,128 @@ function formatShellResult(
     return parts.join("\n");
 }
 
+// ── Change visibility: line diff for file tools ─────────────────────────
+// The file tools attach a display-only `changeSummary` to their result so the
+// activity feed can show WHAT changed without a `git diff` round-trip or a
+// repo scan (`text` — what the agent sees in history — stays unchanged).
+// Minimal LCS line-diff: exact +added/-removed stats plus a bounded list of
+// changed lines. Not a full unified diff — no hunk headers or context lines,
+// since the file path is already the row's subject. Node's stdlib has no
+// diff, so this small DP is the smallest thing that yields real stats.
+// ponytail: O(n·m) DP over lines — fine for normal files; guarded below so a
+// pathological giant file skips the matrix and degrades to a plain marker.
+const DIFF_MATRIX_MAX = 2000; // old+new lines summed — beyond this, skip the DP
+const DIFF_LINES_MAX = 20;    // changed lines shown in the summary
+const DIFF_LINE_MAX = 160;    // per-line cap (narrow terminals)
+
+type LineDiff = { added: number; removed: number; lines: string[] };
+
+function capLine(s: string): string {
+    return s.length > DIFF_LINE_MAX ? s.slice(0, DIFF_LINE_MAX) + "…" : s;
+}
+
+// Truncate the changed-line list to the preview cap, keeping a count marker.
+function boundDiff(added: number, removed: number, lines: string[]): LineDiff {
+    if (lines.length > DIFF_LINES_MAX) {
+        lines.length = DIFF_LINES_MAX;
+        lines.push(`… (${added + removed - DIFF_LINES_MAX} more changed lines)`);
+    }
+    return { added, removed, lines };
+}
+
+export function diffLines(oldText: string, newText: string): LineDiff {
+    const na = oldText.replace(/\r\n/g, "\n");
+    const nb = newText.replace(/\r\n/g, "\n");
+    // Identical (after line-ending normalization) is a no-op — checked BEFORE
+    // the matrix guard so a huge unchanged file reports "No changes", not fake
+    // stats.
+    if (na === nb) return { added: 0, removed: 0, lines: [] };
+    const a = na.split("\n");
+    const b = nb.split("\n");
+    const n = a.length;
+    const m = b.length;
+
+    if (n + m > DIFF_MATRIX_MAX) {
+        // Huge changed file: skip the DP — gross added/removed counts would be
+        // misleading, so report nothing but the marker (changedSummary renders
+        // it plainly).
+        return { added: 0, removed: 0, lines: ["… diff omitted (large change)"] };
+    }
+    // An empty old file splits to one phantom empty line and has nothing to
+    // remove — every new line is an addition (split-count, matching the
+    // create/delete line counts).
+    if (n === 1 && a[0] === "") {
+        return boundDiff(m, 0, b.map((l) => "+ " + capLine(l)));
+    }
+
+    // Classic LCS length table (Uint32 keeps a big-but-normal matrix cheap).
+    const w = m + 1;
+    const dp = new Uint32Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) {
+            dp[i * w + j] =
+                a[i] === b[j]
+                    ? dp[(i + 1) * w + j + 1]! + 1
+                    : Math.max(dp[(i + 1) * w + j]!, dp[i * w + j + 1]!);
+        }
+    }
+
+    // Walk the table emitting `-`/`+` for the differing lines, in order.
+    let added = 0;
+    let removed = 0;
+    const lines: string[] = [];
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+        if (a[i] === b[j]) {
+            i++;
+            j++;
+        } else if (dp[(i + 1) * w + j]! >= dp[i * w + j + 1]!) {
+            lines.push("- " + capLine(a[i]!));
+            removed++;
+            i++;
+        } else {
+            lines.push("+ " + capLine(b[j]!));
+            added++;
+            j++;
+        }
+    }
+    while (i < n) {
+        lines.push("- " + capLine(a[i]!));
+        removed++;
+        i++;
+    }
+    while (j < m) {
+        lines.push("+ " + capLine(b[j]!));
+        added++;
+        j++;
+    }
+
+    return boundDiff(added, removed, lines);
+}
+
+// `Updated X` / `Edited X` / ... header + stats + bounded -/+ changed lines.
+function changedSummary(file: string, verb: string, oldText: string, newText: string): string {
+    const d = diffLines(oldText, newText);
+    // Large-file guard reports no stats (they'd be gross guesses) — just the marker.
+    if (d.lines[0]?.startsWith("… diff omitted")) return `${verb} ${file}\n… diff omitted (large change)`;
+    if (d.added === 0 && d.removed === 0) return `${verb} ${file}\nNo changes`;
+    const head = `${verb} ${file}\n+${d.added} -${d.removed} lines`;
+    return d.lines.length ? `${head}\n\n${d.lines.join("\n")}` : head;
+}
+
+// `Created X` + line count + a small head preview for new files.
+function newFileSummary(file: string, content: string): string {
+    const lines = content.replace(/\r\n/g, "\n").split("\n");
+    const head = lines.slice(0, DIFF_LINES_MAX).map((l) => "+ " + capLine(l));
+    let out = `Created ${file}\n+${lines.length} lines`;
+    if (head.length) {
+        out += `\n\n${head.join("\n")}`;
+        if (lines.length > head.length) out += `\n… (${lines.length - head.length} more lines)`;
+    }
+    return out;
+}
+
 export const read: Tool = {
     name: "read",
     description:
@@ -218,8 +340,11 @@ export const read: Tool = {
             const content = await readFile(file, "utf8");
             log.success(`${content.length} chars`, Date.now() - start);
             return content;
-        } catch (err) {
+        } catch (err: any) {
             log.error(err);
+            // Missing file is the common failure — give the model (and the UI
+            // summary) a clean message instead of a raw Node ENOENT blob.
+            if (err?.code === "ENOENT") throw new Error(`File not found: ${file}`);
             throw err;
         }
     },
@@ -253,9 +378,23 @@ export const write: Tool = {
         const content = coerceToString((args as any).content);
         try {
             assertNotMemoryPath(file);
+            // Snapshot the previous content (one read of the target file, not a
+            // repo scan) so the change summary can diff old → new.
+            let oldContent: string | null = null;
+            try {
+                oldContent = await readFile(file, "utf8");
+            } catch {
+                // ENOENT (or unreadable) → treated as a brand-new file.
+            }
             await writeFile(file, content, "utf8");
             log.success(`Wrote ${file} (${content.length} chars)`, Date.now() - start);
-            return `Wrote ${file}`;
+            return {
+                text: `Wrote ${file}`,
+                changeSummary:
+                    oldContent === null
+                        ? newFileSummary(file, content)
+                        : changedSummary(file, "Updated", oldContent, content),
+            };
         } catch (err) {
             log.error(err);
             throw err;
@@ -289,9 +428,23 @@ export const append: Tool = {
         const content = coerceToString((args as any).content);
         try {
             assertNotMemoryPath(file);
+            // Snapshot the previous content so the summary can diff old → new;
+            // a missing file means appendFile is about to create it.
+            let oldContent: string | null = null;
+            try {
+                oldContent = await readFile(file, "utf8");
+            } catch {
+                // ENOENT → appendFile creates it; treat as a new file.
+            }
             await appendFile(file, content, "utf8");
             log.success(`Appended ${content.length} chars to ${file}`, Date.now() - start);
-            return `Appended to ${file}`;
+            return {
+                text: `Appended to ${file}`,
+                changeSummary:
+                    oldContent === null
+                        ? newFileSummary(file, content)
+                        : changedSummary(file, "Appended to", oldContent, oldContent + content),
+            };
         } catch (err) {
             log.error(err);
             throw err;
@@ -338,7 +491,7 @@ export const edit: Tool = {
             await writeFile(file, updated, "utf8");
             const diffLen = Math.abs(updated.length - content.length);
             log.success(`Edited ${file} (${diffLen} char delta)`, Date.now() - start);
-            return `Edited ${file}`;
+            return { text: `Edited ${file}`, changeSummary: changedSummary(file, "Edited", content, updated) };
         } catch (err) {
             log.error(err);
             throw err;
@@ -369,9 +522,19 @@ export const del: Tool = {
         const { file } = args as { file: string };
         try {
             assertNotMemoryPath(file);
+            // Count lines before unlinking so the summary can show what was removed.
+            let lineCount: number | null = null;
+            try {
+                lineCount = (await readFile(file, "utf8")).split("\n").length;
+            } catch {
+                // Unreadable/binary → plain header, no line count.
+            }
             await unlink(file);
             log.success(`Deleted ${file}`, Date.now() - start);
-            return `Deleted ${file}`;
+            return {
+                text: `Deleted ${file}`,
+                changeSummary: lineCount !== null ? `Deleted ${file}\n-${lineCount} lines` : `Deleted ${file}`,
+            };
         } catch (err) {
             log.error(err);
             throw err;
@@ -728,6 +891,8 @@ export const bash: Tool = {
 
             // Non-zero exit is a RESULT, not an exception — the model needs the
             // output to decide the next step. Same for timeouts/killed processes.
+            // `ok: false` marks the failure for the loop so the feed shows ✗
+            // (the formatted text is still the full agent-facing result).
             const e = err as { code?: number; signal?: string; stdout?: string; stderr?: string; message?: string };
             const exitCode = typeof e.code === "number" ? e.code : 1;
             // Command-not-found (ENOENT) can reject with empty stderr but a useful message.
@@ -742,7 +907,7 @@ export const bash: Tool = {
                 e.signal
             );
             log.success(`exit ${exitCode} in ${Date.now() - start}ms`, Date.now() - start);
-            return result;
+            return { ok: false, text: result };
         }
     },
 };

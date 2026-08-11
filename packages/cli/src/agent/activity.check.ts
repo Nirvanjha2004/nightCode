@@ -15,7 +15,7 @@ import { ToolRegistry } from "./registry";
 import { ContextBuilder } from "./context";
 import { CommandRegistry } from "./commands";
 import { AgentHarness } from "./agent-harness";
-import { AgentLoop, previewToolArgs, previewToolResult } from "./loop";
+import { AgentLoop, previewToolArgs, previewToolResult, summarizeToolFailure } from "./loop";
 import { EpisodicMemoryManager } from "./memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./memory/SemanticMemoryManager";
 import { ProceduralMemoryManager } from "./memory/ProceduralMemoryManager";
@@ -67,6 +67,24 @@ async function main() {
         assert.ok(huge.includes("output truncated"), "huge results get a truncation marker");
         assert.ok(huge.length < 500, "huge preview stays bounded (marker not cut off)");
 
+        // ── failure summaries stay concise ────────────────────────────
+        assert.equal(
+            summarizeToolFailure("Error: File not found: src/nonexistent.ts"),
+            "File not found: src/nonexistent.ts",
+            "thrown errors strip the Error: prefix"
+        );
+        const shellFailText =
+            "$ npm test\n--- stdout ---\n1 passed\n--- stderr ---\n2 tests failed\nExpected 200 but received 401\nexit code: 1 — took 3200ms";
+        assert.equal(
+            summarizeToolFailure(shellFailText),
+            "exit code 1\n2 tests failed",
+            "shell failures surface exit code + first stderr line"
+        );
+        assert.ok(
+            summarizeToolFailure("Error: " + "y".repeat(500)).length <= 120,
+            "failure summary is bounded"
+        );
+
         // ── event stream ───────────────────────────────────────────────
         const fakeTool: Tool = {
             name: "fake_tool",
@@ -82,12 +100,34 @@ async function main() {
                 throw new Error("boom");
             },
         };
+        const shellFailTool: Tool = {
+            name: "shell_fail",
+            description: "returns a shell-style failure result",
+            parameters: { type: "object", properties: {}, required: [] },
+            exec: async () => ({
+                ok: false,
+                text: "$ npm test\n--- stdout ---\n1 passed\n--- stderr ---\n2 tests failed\nExpected 200 but received 401\nexit code: 1 — took 3200ms",
+            }),
+        };
+        const changeToolSummary =
+            "Updated src/auth.ts\n+1 -1 lines\n\n- const token = req.headers.authorization;\n+ const token = req.headers.authorization?.replace(\"Bearer \", \"\");";
+        const changeTool: Tool = {
+            name: "change_tool",
+            description: "returns a structured result with a display-only change summary",
+            parameters: { type: "object", properties: {}, required: [] },
+            exec: async () => ({
+                text: "Wrote src/auth.ts",
+                changeSummary: changeToolSummary,
+            }),
+        };
 
         const messageManager = new MessageManager();
         const sessionManager = new SessionManager();
         const toolRegistry = new ToolRegistry();
         toolRegistry.register(fakeTool);
         toolRegistry.register(badTool);
+        toolRegistry.register(shellFailTool);
+        toolRegistry.register(changeTool);
 
         const semanticMemory = new SemanticMemoryManager(join(dir, "semantic.json"));
         const proceduralMemory = new ProceduralMemoryManager(join(dir, "procedural.md"));
@@ -121,6 +161,8 @@ async function main() {
                         toolCalls: [
                             { id: "c1", name: "fake_tool", args: {} },
                             { id: "c2", name: "bad_tool", args: {} },
+                            { id: "c3", name: "shell_fail", args: {} },
+                            { id: "c4", name: "change_tool", args: {} },
                         ],
                     };
                 }
@@ -136,7 +178,7 @@ async function main() {
             onEvent: (e) => events.push(e),
         });
 
-        // Expected order: stage(memory) → iter 1 → tool_start/end × 2 → iter 2.
+        // Expected order: stage(memory) → iter 1 → tool_start/end × 4 → iter 2.
         assert.equal(events[0]?.type, "stage", "memory stage leads the stream");
         const iter1 = events[1];
         assert.equal(iter1?.type, "iteration", "iteration follows the stage");
@@ -147,8 +189,8 @@ async function main() {
 
         const starts = events.filter((e) => e.type === "tool_start");
         const ends = events.filter((e) => e.type === "tool_end");
-        assert.equal(starts.length, 2, "one tool_start per tool call");
-        assert.equal(ends.length, 2, "one tool_end per tool call");
+        assert.equal(starts.length, 4, "one tool_start per tool call");
+        assert.equal(ends.length, 4, "one tool_end per tool call");
 
         const firstStart = starts[0];
         if (firstStart?.type === "tool_start") {
@@ -164,7 +206,25 @@ async function main() {
         const end1 = ends[1];
         if (end1?.type === "tool_end") {
             assert.equal(end1.ok, false, "throwing tool reports ok=false");
-            assert.ok(String(end1.resultPreview).includes("boom"), "error preview carries the failure");
+            assert.equal(end1.resultPreview, "boom", "thrown error preview is the concise message");
+        }
+        const end2 = ends[2];
+        if (end2?.type === "tool_end") {
+            assert.equal(end2.ok, false, "shell failure result reports ok=false");
+            assert.equal(
+                end2.resultPreview,
+                "exit code 1\n2 tests failed",
+                "shell failure preview is the concise summary"
+            );
+        }
+        const end3 = ends[3];
+        if (end3?.type === "tool_end") {
+            assert.equal(end3.ok, true, "change tool reports ok=true");
+            assert.equal(
+                end3.resultPreview,
+                changeToolSummary,
+                "structured changeSummary surfaces as the feed preview"
+            );
         }
 
         // A tool_end must never precede its tool_start — the UI pairs them and

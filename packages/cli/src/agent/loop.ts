@@ -89,6 +89,39 @@ export function previewToolResult(result: string): string {
     return out;
 }
 
+// Concise, bounded failure summary for the activity feed when a tool FAILS.
+// The full result is still stored in history for the agent — this is purely
+// the UI one-liner, so a 10k-line failed build never dumps into the terminal.
+// Shell-formatted results (bash) end with `exit code: N — took Xms`: surface
+// the exit code plus the first meaningful stderr line (where failures usually
+// surface). Thrown errors: keep the message, drop the `Error: ` prefix.
+const FAILURE_SUMMARY_LINES = 2;
+const FAILURE_SUMMARY_LINE_MAX = 120;
+
+export function summarizeToolFailure(result: string): string {
+    const lines = result.replace(/\r\n/g, "\n").split("\n");
+    // formatShellResult always ends with `exit code: N … — took Xms` — match
+    // only the LAST line so an "exit code: N" printed in stdout/stderr can't
+    // be mistaken for the real exit code.
+    const exitMatch = lines[lines.length - 1]?.match(/exit code: (\d+)/);
+    if (exitMatch) {
+        const summary = [`exit code ${exitMatch[1]}`];
+        const stderrIdx = lines.findIndex((l) => l === "--- stderr ---");
+        if (stderrIdx >= 0) {
+            for (const raw of lines.slice(stderrIdx + 1)) {
+                const line = raw.trim();
+                if (line && !line.startsWith("exit code:")) {
+                    summary.push(line.slice(0, FAILURE_SUMMARY_LINE_MAX));
+                    break;
+                }
+            }
+        }
+        return summary.slice(0, FAILURE_SUMMARY_LINES).join("\n");
+    }
+    const first = lines.find((l) => l.trim()) ?? "Tool failed";
+    return first.replace(/^Error:\s*/, "").slice(0, FAILURE_SUMMARY_LINE_MAX);
+}
+
 export class AgentLoop {
     constructor(
         private harness: AgentHarness,
@@ -295,6 +328,9 @@ export class AgentLoop {
                                         }
                                         let result = "";
                                         let toolOk = true;
+                                        // File tools attach a display-only change summary (diff stats + bounded
+                                        // -/+ lines) that becomes the feed preview instead of the raw result head.
+                                        let changeSummary: string | undefined;
                                         const startTime = Date.now();
 
                                         await tracer.startActiveSpan(
@@ -357,13 +393,27 @@ export class AgentLoop {
                                                         toolName: toolCall.name,
                                                         argsPreview: previewToolArgs(toolCall.name, toolCall.args),
                                                     });
-                                                    const execResult = await tool.exec(toolCall.args, this.harness, options?.signal);
-                                                    result = typeof execResult === "string" ? execResult : JSON.stringify(execResult);
+                                                    const execResult: unknown = await tool.exec(toolCall.args, this.harness, options?.signal);
+                                                    if (typeof execResult === "string") {
+                                                        result = execResult;
+                                                    } else if (execResult && typeof execResult === "object") {
+                                                        // Structured shell-tool result: a failing command is a RESULT, not an
+                                                        // exception (the model gets stdout/stderr/exit code and can recover), but
+                                                        // `ok: false` flips the feed row to ✗. The full text stays the agent's view.
+                                                        // File tools add `changeSummary` — a display-only diff — surfaced in the
+                                                        // feed below; the agent still sees `text` unchanged.
+                                                        const structured = execResult as { ok?: boolean; text?: string; changeSummary?: string };
+                                                        if (structured.ok === false) toolOk = false;
+                                                        result = typeof structured.text === "string" ? structured.text : JSON.stringify(execResult);
+                                                        if (typeof structured.changeSummary === "string") changeSummary = structured.changeSummary;
+                                                    } else {
+                                                        result = JSON.stringify(execResult);
+                                                    }
                                                     const elapsed = Date.now() - startTime;
                                                     logger.info(`[AgentLoop] Tool "${toolCall.name}" completed in ${elapsed}ms`, {
                                                         resultLen: result.length,
                                                     });
-                                                    toolSpan.setAttribute("tool.success", true);
+                                                    toolSpan.setAttribute("tool.success", toolOk);
                                                     toolSpan.setAttribute("tool.result.length", result.length);
                                                     toolSpan.addEvent("Tool finished");
                                                 } catch (err) {
@@ -399,7 +449,12 @@ export class AgentLoop {
                                             toolName: toolCall.name,
                                             ok: toolOk,
                                             durationMs: Date.now() - startTime,
-                                            resultPreview: previewToolResult(result),
+                                            // Success: the file tools' change summary (bounded diff) when present,
+                                            // else the bounded head preview. Failure: concise one-liner — the full
+                                            // result (exit code, stderr, stdout) still reaches the agent.
+                                            resultPreview: toolOk
+                                                ? changeSummary ?? previewToolResult(result)
+                                                : summarizeToolFailure(result),
                                         });
 
                                         // Store the tool RESULT back into history (role:"tool", linked

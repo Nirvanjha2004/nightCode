@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isDestructiveCommand, truncate, buildRipgrepArgs, grep, renderTodoList, todoWrite } from "./tools";
+import { isDestructiveCommand, truncate, buildRipgrepArgs, grep, renderTodoList, todoWrite, diffLines, write, edit, append, del } from "./tools";
 
 // Commands that MUST trigger the confirmation prompt.
 const destructive = [
@@ -102,6 +102,104 @@ if (spawnSync("rg", ["--version"]).status === 0) {
     console.log("Skipping grep integration — ripgrep not on PATH.");
 }
 
+// ── change visibility: diff + change summaries ───────────────────────────
+const d1 = diffLines("const a = 1;\nconst b = 2;\n", "const a = 1;\nconst b = 3;\n");
+assert.deepEqual([d1.added, d1.removed], [1, 1], "single-line edit stats");
+assert.deepEqual(d1.lines, ["- const b = 2;", "+ const b = 3;"], "changed lines emitted in order");
+
+const d2 = diffLines("a\nb\nc\n", "a\nx\ny\nc\n");
+assert.equal(d2.added, 2, "insertions counted");
+assert.equal(d2.removed, 1, "replacement removal counted");
+
+assert.deepEqual(diffLines("same\n", "same\n"), { added: 0, removed: 0, lines: [] }, "identical content is a no-op");
+
+// An empty old file has nothing to remove — every line counts as an addition
+// (split-count, consistent with the create/delete line counts).
+const d3 = diffLines("", "line1\nline2\nline3\n");
+assert.equal(d3.added, 4, "new file = all lines added");
+assert.ok(d3.lines.every((l) => l.startsWith("+ ")), "new-file diff lines are additions");
+// No phantom "- " removal when the old side is empty.
+assert.deepEqual(diffLines("", "x"), { added: 1, removed: 0, lines: ["+ x"] }, "empty old file: all additions");
+
+const big = diffLines("old\n".repeat(100), "new\n".repeat(100));
+assert.ok(big.lines.length <= 21, "diff preview is bounded (20 lines + marker)");
+assert.ok(big.lines[big.lines.length - 1]?.startsWith("… ("), "bound marker present");
+
+// The matrix guard must never invent stats for huge files: identical content is
+// still "no changes", and a real huge change degrades to a plain marker.
+assert.deepEqual(
+    diffLines("x\n".repeat(5_000), "x\n".repeat(5_000)),
+    { added: 0, removed: 0, lines: [] },
+    "huge identical files report no changes"
+);
+assert.ok(
+    diffLines("old\n".repeat(5_000), "new\n".repeat(5_000)).lines[0]?.startsWith("… diff omitted"),
+    "huge changed file degrades to a plain marker"
+);
+
+// ── write/edit/append/delete change summaries (real temp files) ──────────
+{
+    const dir = mkdtempSync(join(tmpdir(), "change-check-"));
+    try {
+        const f = join(dir, "a.ts");
+        writeFileSync(f, "const token = req.headers.authorization;\n");
+
+        // write → overwrite an existing file
+        let res = (await write.exec({ file: f, content: "const token = req.headers.authorization?.replace(\"Bearer \", \"\");\n" })) as {
+            text: string;
+            changeSummary: string;
+        };
+        assert.equal(res.text, `Wrote ${f}`, "write text unchanged");
+        assert.ok(res.changeSummary.includes(`Updated ${f}`), "overwrite says Updated");
+        assert.ok(res.changeSummary.includes("+1 -1 lines"), "overwrite stats");
+        assert.ok(res.changeSummary.includes("- const token = req.headers.authorization;"), "old line in diff");
+        assert.ok(res.changeSummary.includes("+ const token = req.headers.authorization?.replace"), "new line in diff");
+
+        // write → brand-new file
+        res = (await write.exec({ file: join(dir, "new.ts"), content: "export const x = 1;\n" })) as {
+            text: string;
+            changeSummary: string;
+        };
+        assert.ok(res.changeSummary.startsWith(`Created ${join(dir, "new.ts")}`), "new file says Created");
+        assert.ok(res.changeSummary.includes("+2 lines"), "new file line count");
+
+        // write → identical content
+        res = (await write.exec({ file: f, content: "const token = req.headers.authorization?.replace(\"Bearer \", \"\");\n" })) as {
+            text: string;
+            changeSummary: string;
+        };
+        assert.ok(res.changeSummary.includes("No changes"), "unchanged write says No changes");
+
+        // edit → targeted replacement
+        res = (await edit.exec({ file: f, oldText: "const token", newText: "const auth" })) as {
+            text: string;
+            changeSummary: string;
+        };
+        assert.equal(res.text, `Edited ${f}`, "edit text unchanged");
+        assert.ok(res.changeSummary.startsWith(`Edited ${f}`), "edit header");
+        assert.ok(res.changeSummary.includes("+1 -1 lines"), "edit stats");
+
+        // append → added lines only
+        res = (await append.exec({ file: f, content: "\n// done\n" })) as {
+            text: string;
+            changeSummary: string;
+        };
+        assert.equal(res.text, `Appended to ${f}`, "append text unchanged");
+        assert.ok(res.changeSummary.includes("+2 -0 lines"), "append stats");
+
+        // delete → removed line count
+        res = (await del.exec({ file: join(dir, "new.ts") })) as {
+            text: string;
+            changeSummary: string;
+        };
+        assert.equal(res.text, `Deleted ${join(dir, "new.ts")}`, "delete text unchanged");
+        assert.ok(res.changeSummary.includes("-2 lines"), "delete line count");
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+    console.log("write/edit/append/delete change summaries verified.");
+}
+
 // ── todoWrite rendering ───────────────────────────────────────────────────
 const plan = renderTodoList([
     { content: "first", status: "completed" },
@@ -138,5 +236,5 @@ assert.ok(!cut.includes("m".repeat(4_000)), "middle should be dropped");
 assert.equal(truncate("short", 12_000), "short", "short strings unchanged");
 
 console.log(
-    `PASS — ${destructive.length} destructive commands flagged, ${safe.length} safe commands allowed, truncation verified.`
+    `PASS — ${destructive.length} destructive commands flagged, ${safe.length} safe commands allowed, truncation verified, change summaries verified.`
 );
