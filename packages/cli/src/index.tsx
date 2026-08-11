@@ -92,9 +92,11 @@ function ConfirmDialog({ pending }: { pending: PendingConfirm }) {
                     </text>
                 </box>
 
-                {/* Tool info — use a single text element with interpolated string */}
+                {/* Tool info — use a single text element with interpolated string.
+                    wrapMode="word" keeps long args previews readable (wrapped) on
+                    narrow terminals instead of clipping mid-line. */}
                 <box paddingX={1}>
-                    <text fg={C.text}>
+                    <text fg={C.text} wrapMode="word">
                         {pending.toolName}({argsStr})
                     </text>
                 </box>
@@ -265,6 +267,22 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
             { id: crypto.randomUUID(), role, content },
         ]);
     };
+
+    // ── Scroll following ─────────────────────────────────────────────
+    // The scrollbox's stickyScroll handles follow-bottom natively (it stops
+    // following once the user scrolls away and re-engages when they return to
+    // the bottom). The one gap: starting a new run must jump to the bottom even
+    // if the user had scrolled up during a previous run — otherwise the new
+    // prompt/response would land out of view. Jumping also re-engages follow.
+    useEffect(() => {
+        if (loading) {
+            const sb = scrollRef.current;
+            // scrollTop clamps to max, and the setter re-syncs the follow state.
+            // If the jump lands a frame before the new message is measured,
+            // stickyScroll self-corrects to the new bottom on the next layout.
+            if (sb) sb.scrollTop = sb.scrollHeight;
+        }
+    }, [loading]);
 
     // ── Agent activity feed ──────────────────────────────────────────
     const [activity, setActivity] = useState<AgentEvent[]>([]);

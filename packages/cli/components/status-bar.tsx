@@ -52,24 +52,27 @@ export function StatusBar({ model, cwd, status }: StatusBarProps) {
             alignItems="center"
             width="100%"
         >
-            {/* Model · Working Directory · Current State */}
-            <text attributes={TextAttributes.BOLD} fg={C.blue}>
+            {/* Model · Working Directory · Current State.
+                wrapMode="none" keeps the bar on ONE row on narrow terminals; the
+                model and path absorb the shrink (truncate adds the …), while the
+                separators and status label never shrink so the state stays readable. */}
+            <text attributes={TextAttributes.BOLD} fg={C.blue} wrapMode="none" truncate>
                 {model}
             </text>
 
-            <text attributes={TextAttributes.DIM} fg={C.subtitle}>
+            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" flexShrink={0}>
                 ·
             </text>
 
-            <text attributes={TextAttributes.DIM} fg={C.subtitle}>
+            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" truncate>
                 {compactPath(cwd, 40)}
             </text>
 
-            <text attributes={TextAttributes.DIM} fg={C.subtitle}>
+            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" flexShrink={0}>
                 ·
             </text>
 
-            <text attributes={TextAttributes.BOLD} fg={STATUS_COLOR[status]}>
+            <text attributes={TextAttributes.BOLD} fg={STATUS_COLOR[status]} wrapMode="none" flexShrink={0}>
                 {STATUS_LABEL[status]}
             </text>
         </box>
