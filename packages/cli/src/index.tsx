@@ -10,6 +10,7 @@ import type { AgentEvent, ConfirmHook } from "./agent/types";
 import type { Command } from "../components/commands-menu/types";
 import type { AgentStatus } from "../components/status-bar";
 import { logger } from "./logger";
+import { MarkdownContent, type MdPalette } from "./markdown";
 // Display-only — agent context lives in backend MessageManager, not here
 type DisplayMessage = {
     id: string;
@@ -42,6 +43,16 @@ const C = {
     mauve: "#CBA6F7",
     peach: "#FAB387",
     teal: "#94E2D5",
+};
+
+// ── Markdown palette for assistant replies (shared with markdown.tsx) ──────────
+const MD_PALETTE: MdPalette = {
+    text: C.text,
+    blue: C.blue,
+    teal: C.teal,
+    peach: C.peach,
+    surface1: C.surface1,
+    surface2: C.surface2,
 };
 
 // ── Role label config ─────────────────────────────────────────────────────────
@@ -168,7 +179,7 @@ function ToolEndRow({ event }: { event: Extract<AgentEvent, { type: "tool_end" }
 }
 
 // ── Message bubble component ───────────────────────────────────────────────────
-function MessageBubble({ msg }: { msg: DisplayMessage }) {
+export function MessageBubble({ msg }: { msg: DisplayMessage }) {
     const cfg = ROLE_CONFIG[msg.role];
     const isUser = msg.role === "user";
 
@@ -215,14 +226,15 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
                     </text>
                 </box>
 
-                {/* Message content */}
+                {/* Message content — assistant replies render as markdown */}
                 <box paddingX={1} paddingY={1}>
-                    <text
-                        fg={C.text}
-                        wrapMode="word"
-                    >
-                        {msg.content}
-                    </text>
+                    {msg.role === "assistant" ? (
+                        <MarkdownContent content={msg.content} palette={MD_PALETTE} />
+                    ) : (
+                        <text fg={C.text} wrapMode="word">
+                            {msg.content}
+                        </text>
+                    )}
                 </box>
             </box>
         </box>
