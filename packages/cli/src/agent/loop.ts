@@ -223,8 +223,18 @@ export class AgentLoop {
                                 iterSpan.setAttribute("context.message.count", context.messages.length);
                                 iterSpan.setAttribute("context.tool.count", context.tools.length);
 
-                                // Step 3: LLM call — traced as "llm.call" inside the client
-                                const response = await this.llm.chat(context, options?.signal);
+                                // Step 3: LLM call — traced as "llm.call" inside the client.
+                                // The client streams the generated text; each fragment is
+                                // forwarded to the UI as a text_delta event so the response
+                                // renders progressively. The returned LLMResponse still
+                                // carries the FULL text for history/context/logging.
+                                const response = await this.llm.chat(
+                                    context,
+                                    options?.signal,
+                                    (delta: string) => {
+                                        options?.onEvent?.({ type: "text_delta", delta });
+                                    }
+                                );
                                 throwIfAborted(options?.signal);
 
                                 iterSpan.addEvent("LLM response received");

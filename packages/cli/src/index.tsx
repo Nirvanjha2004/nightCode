@@ -237,6 +237,9 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
     const [messages, setMessages] = useState<DisplayMessage[]>([]);
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState<AgentStatus>("ready");
+    const [streaming, setStreaming] = useState(false);
+    const [streamText, setStreamText] = useState("");
+    const streamRef = useRef("");
     const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
     const pendingRef = useRef(pendingConfirm);
     pendingRef.current = pendingConfirm;
@@ -266,6 +269,14 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
         return () => clearInterval(t);
     }, [liveTool]);
 
+    // Streamed text is buffered in a ref and flushed to the renderer at a low
+    // frequency, so a fast LLM stream doesn't trigger a re-render per token.
+    useEffect(() => {
+        if (!streaming) return;
+        const t = setInterval(() => setStreamText(streamRef.current), 50);
+        return () => clearInterval(t);
+    }, [streaming]);
+
     // Stream events from the loop into the feed. tool_start becomes the live
     // row (tools run sequentially, so at most one is live); tool_end finalizes it.
     const handleAgentEvent = useCallback((event: AgentEvent) => {
@@ -282,6 +293,12 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
             // A cancelled run may have left a ghost live-tool row — clear it.
             setLiveTool(null);
             setActivity((prev) => [...prev, event]);
+            return;
+        }
+        if (event.type === "text_delta") {
+            // Buffer streamed text; the flush timer above pushes it to the
+            // renderer. Never routed to the activity feed.
+            streamRef.current += event.delta;
             return;
         }
         setActivity((prev) => [...prev, event]);
@@ -387,6 +404,10 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
         push("user", trimmed);
         setLoading(true);
         setStatus("running");
+        // A fresh run starts a fresh streamed response.
+        streamRef.current = "";
+        setStreamText("");
+        setStreaming(true);
         // A fresh run restarts the ^C^C exit window — Ctrl+C here is the first
         // press of the new run, not a double-press left over from a prior one.
         lastCancelTsRef.current = 0;
@@ -402,6 +423,7 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
             setStatus("ready");
+            setStreaming(false);
         } catch (err) {
             setLiveTool(null); // an aborted run may have left a ghost tool row
             // Cancellation is NOT an error: the activity feed shows "⚠ Cancelled",
@@ -410,6 +432,7 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
                 logger.info("[UI] Agent run cancelled");
                 handleAgentEvent({ type: "cancelled" });
                 setStatus("cancelled");
+                setStreaming(false);
             } else {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 logger.error(`[UI] Agent execution failed: ${errMsg}`, {
@@ -417,6 +440,7 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
                 });
                 push("error", errMsg);
                 setStatus("error");
+                setStreaming(false);
             }
         } finally {
             // A finished run can no longer be cancelled by a late keypress.
@@ -476,6 +500,13 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
                         <MessageBubble msg={msg} />
                     </box>
                 ))}
+
+                {/* The assistant response grows in place while it streams. */}
+                {streaming && streamText && (
+                    <box key="streaming" marginBottom={1}>
+                        <MessageBubble msg={{ id: "streaming", role: "assistant", content: streamText }} />
+                    </box>
+                )}
 
                 {activity.length > 0 && (
                     <box paddingX={2} flexDirection="column" marginBottom={1}>

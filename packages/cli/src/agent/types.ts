@@ -153,6 +153,7 @@ export type AgentEvent =
     | { type: "iteration"; n: number; max: number }
     | { type: "tool_start"; toolName: string; argsPreview: string }
     | { type: "tool_end"; toolName: string; ok: boolean; durationMs: number; resultPreview: string }
+    | { type: "text_delta"; delta: string }
     | { type: "cancelled" };
 
 // Message types

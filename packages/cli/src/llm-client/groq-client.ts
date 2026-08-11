@@ -40,13 +40,17 @@ export class GroqClient implements LLMClient {
         logger.info("[GroqClient] Initialized");
     }
 
-    async chat(context: ContextType, signal?: AbortSignal): Promise<LLMResponse> {
+    async chat(
+        context: ContextType,
+        signal?: AbortSignal,
+        onDelta?: (text: string) => void
+    ): Promise<LLMResponse> {
         logger.info(
             `[GroqClient] Chat request | model=${context.model} | messages=${context.messages.length} | tools=${context.tools.length}`
         );
 
         try {
-            return await this.callGroq(context, "auto", signal);
+            return await this.callGroq(context, "auto", signal, onDelta);
         } catch (err: any) {
             // Cancellation via AbortSignal is NOT an API failure — surface it
             // untouched (no retry, no repair prompt, no error log).
@@ -83,7 +87,8 @@ export class GroqClient implements LLMClient {
                             systemPrompt: context.systemPrompt + REPAIR_PROMPT + feedback,
                         },
                         "auto",
-                        signal
+                        signal,
+                        onDelta
                     );
                 } catch (repairErr: any) {
                     if (signal?.aborted) {
@@ -107,7 +112,8 @@ export class GroqClient implements LLMClient {
                                     `\n\nIMPORTANT:\nTool calling is currently unavailable. Answer the user's request directly in plain text based on the conversation so far.`,
                             },
                             "none", // explicit: no tool calls allowed, plain text only
-                            signal
+                            signal,
+                            onDelta
                         );
                     }
 
@@ -122,7 +128,8 @@ export class GroqClient implements LLMClient {
     private async callGroq(
         context: ContextType,
         toolChoice: "auto" | "none" = "auto",
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        onDelta?: (text: string) => void
     ): Promise<LLMResponse> {
         return tracer.startActiveSpan("llm.call", async (llmSpan): Promise<LLMResponse> => {
             // Cancel-latency bisect: (1) prove the abort EVENT is delivered to the
@@ -149,7 +156,29 @@ export class GroqClient implements LLMClient {
                 // max_tokens, so there is no value to attribute.
                 llmSpan.addEvent("Sending request to LLM");
 
-                const requestPromise = this.client.chat.completions.create({
+                // ── Abort watchdog ──────────────────────────────────────────────
+                // Bun's fetch does not reliably reject an in-flight request when its
+                // AbortSignal fires — measured 7+ seconds of the fetch holding the
+                // abort while the run's signal fired in 2ms. The SDK cannot fix that,
+                // so race the request AND each streamed chunk read against a watchdog
+                // that rejects the INSTANT the run's signal fires. Cancellation then
+                // settles in ~ms regardless of the fetch's behavior; the orphaned
+                // request settles in the background and is swallowed below.
+                // ponytail: the orphaned request stays alive until the SDK's 60s
+                // timeout, holding one socket in the background — bounded and
+                // user-invisible; the upgrade path is a hard kill, which the SDK
+                // already partially does by relaying the same signal to the fetch.
+                let onAbort: (() => void) | undefined;
+                const abortPromise = new Promise<never>((_resolve, reject) => {
+                    onAbort = () => {
+                        reject(new CancelledError());
+                    };
+                    if (signal?.aborted) onAbort();
+                    else signal?.addEventListener("abort", onAbort, { once: true });
+                });
+
+                // stream: true — the assistant's text arrives chunk by chunk.
+                const createPromise = this.client.chat.completions.create({
                     model: context.model,
 
                     tools: context.tools,
@@ -157,6 +186,8 @@ export class GroqClient implements LLMClient {
                     tool_choice: toolChoice,
 
                     temperature: LLM_TEMPERATURE,
+
+                    stream: true,
 
                     messages: [
                         {
@@ -216,114 +247,118 @@ export class GroqClient implements LLMClient {
                         }),
                     ],
                 }, { signal });
+                createPromise.catch(() => {}); // never surface the orphaned settle
 
-                // ── Abort watchdog ──────────────────────────────────────────────
-                // Bun's fetch does not reliably reject an in-flight request when its
-                // AbortSignal fires — measured 7+ seconds of the fetch holding the
-                // abort while the run's signal fired in 2ms. The SDK cannot fix that,
-                // so race the request against a watchdog that rejects the INSTANT the
-                // run's signal fires. Cancellation then settles in ~ms regardless of
-                // the fetch's behavior; the orphaned request settles in the background
-                // and is swallowed below.
-                // ponytail: the orphaned request stays alive until the SDK's 60s
-                // timeout, holding one socket in the background — bounded and
-                // user-invisible; the upgrade path is a hard kill, which the SDK
-                // already partially does by relaying the same signal to the fetch.
-                requestPromise.catch(() => {}); // never surface the orphaned settle
-                let onAbort: (() => void) | undefined;
-                const abortPromise = new Promise<never>((_resolve, reject) => {
-                    onAbort = () => {
-                        reject(new CancelledError());
-                    };
-                    if (signal?.aborted) onAbort();
-                    else signal?.addEventListener("abort", onAbort, { once: true });
-                });
-
-                let response: Awaited<typeof requestPromise>;
                 try {
-                    response = await Promise.race([requestPromise, abortPromise]);
+                    const stream = await Promise.race([createPromise, abortPromise]);
+
+                    const iterator = stream[Symbol.asyncIterator]();
+                    let fullContent = "";
+                    const toolCallFragments: Array<{ id: string; name: string; arguments: string }> = [];
+
+                    while (true) {
+                        // Race each chunk read against the watchdog so an abort
+                        // mid-response settles in ~ms, not after the stream stalls.
+                        const { done, value } = await Promise.race([iterator.next(), abortPromise]);
+                        if (done) break;
+
+                        const delta = value.choices?.[0]?.delta;
+
+                        if (delta?.content) {
+                            fullContent += delta.content;
+                            onDelta?.(delta.content);
+                        }
+
+                        // Tool-call fragments arrive split across chunks; the SDK
+                        // keys them by index, so reassemble them positionally.
+                        if (delta?.tool_calls) {
+                            for (const tc of delta.tool_calls) {
+                                const idx = tc.index ?? 0;
+                                toolCallFragments[idx] = toolCallFragments[idx] ?? { id: "", name: "", arguments: "" };
+                                if (tc.id) toolCallFragments[idx].id = tc.id;
+                                if (tc.function?.name) toolCallFragments[idx].name = tc.function.name;
+                                if (tc.function?.arguments) toolCallFragments[idx].arguments += tc.function.arguments;
+                            }
+                        }
+
+                        // Groq sends token usage in the final streamed chunk.
+                        if (value.x_groq?.usage) {
+                            llmSpan.setAttribute("llm.input_tokens", value.x_groq.usage.prompt_tokens);
+                            llmSpan.setAttribute("llm.output_tokens", value.x_groq.usage.completion_tokens);
+                            llmSpan.setAttribute("llm.total_tokens", value.x_groq.usage.total_tokens);
+                        }
+                    }
+
+                    const elapsed = Date.now() - started;
+
+                    if (toolCallFragments.length > 0) {
+                        logger.info(
+                            `[GroqClient] ${toolCallFragments.length} tool call(s) generated (${elapsed} ms)`
+                        );
+
+                        llmSpan.setAttribute("llm.response.type", "tool_calls");
+                        llmSpan.setAttribute("llm.tool_calls", toolCallFragments.length);
+                        llmSpan.setAttribute("llm.response.length", toolCallFragments.length);
+                        llmSpan.addEvent("Tool calls requested");
+
+                        return {
+                            type: "tool_calls",
+
+                            toolCalls: toolCallFragments.map((toolCall) => {
+                                if (!toolCall.id) {
+                                    throw new Error(
+                                        "Tool call missing id"
+                                    );
+                                }
+
+                                if (!toolCall.name) {
+                                    throw new Error(
+                                        "Tool call missing function name"
+                                    );
+                                }
+
+                                let args: Record<string, unknown>;
+
+                                try {
+                                    args = JSON.parse(
+                                        toolCall.arguments
+                                    );
+                                } catch {
+                                    throw new Error(
+                                        `Failed to parse tool arguments for "${toolCall.name}"`
+                                    );
+                                }
+
+                                return {
+                                    id: toolCall.id,
+                                    name: toolCall.name,
+                                    args,
+                                };
+                            }),
+                        };
+                    }
+
+                    if (!fullContent) {
+                        logger.error("[GroqClient] Empty response");
+                        throw new Error("Groq returned no content.");
+                    }
+
+                    logger.info(
+                        `[GroqClient] Text response (${elapsed} ms)`
+                    );
+
+                    llmSpan.setAttribute("llm.response.type", "text");
+                    llmSpan.setAttribute("llm.tool_calls", 0);
+                    llmSpan.setAttribute("llm.response.length", fullContent.length);
+                    llmSpan.addEvent("Natural language response returned");
+
+                    return {
+                        type: "text",
+                        content: fullContent,
+                    };
                 } finally {
                     if (onAbort && signal) signal.removeEventListener("abort", onAbort);
                 }
-
-                const elapsed = Date.now() - started;
-
-                // Token usage (if the provider returns it)
-                if (response.usage) {
-                    llmSpan.setAttribute("llm.input_tokens", response.usage.prompt_tokens);
-                    llmSpan.setAttribute("llm.output_tokens", response.usage.completion_tokens);
-                    llmSpan.setAttribute("llm.total_tokens", response.usage.total_tokens);
-                }
-
-                const message = response.choices[0]?.message;
-
-                if (!message) {
-                    logger.error("[GroqClient] Empty response");
-                    throw new Error("Groq returned no message.");
-                }
-
-                llmSpan.addEvent("Response received");
-
-                if (message.tool_calls?.length) {
-                    logger.info(
-                        `[GroqClient] ${message.tool_calls.length} tool call(s) generated (${elapsed} ms)`
-                    );
-
-                    llmSpan.setAttribute("llm.response.type", "tool_calls");
-                    llmSpan.setAttribute("llm.tool_calls", message.tool_calls.length);
-                    llmSpan.setAttribute("llm.response.length", message.tool_calls.length);
-                    llmSpan.addEvent("Tool calls requested");
-
-                    return {
-                        type: "tool_calls",
-
-                        toolCalls: message.tool_calls.map((toolCall) => {
-                            if (!toolCall.id) {
-                                throw new Error(
-                                    "Tool call missing id"
-                                );
-                            }
-
-                            if (!toolCall.function?.name) {
-                                throw new Error(
-                                    "Tool call missing function name"
-                                );
-                            }
-
-                            let args: Record<string, unknown>;
-
-                            try {
-                                args = JSON.parse(
-                                    toolCall.function.arguments
-                                );
-                            } catch {
-                                throw new Error(
-                                    `Failed to parse tool arguments for "${toolCall.function.name}"`
-                                );
-                            }
-
-                            return {
-                                id: toolCall.id,
-                                name: toolCall.function.name,
-                                args,
-                            };
-                        }),
-                    };
-                }
-
-                logger.info(
-                    `[GroqClient] Text response (${elapsed} ms)`
-                );
-
-                llmSpan.setAttribute("llm.response.type", "text");
-                llmSpan.setAttribute("llm.tool_calls", 0);
-                llmSpan.setAttribute("llm.response.length", (message.content ?? "").length);
-                llmSpan.addEvent("Natural language response returned");
-
-                return {
-                    type: "text",
-                    content: message.content ?? "",
-                };
             } catch (err) {
                 if (signal?.aborted) {
                     console.log("llm.call fetch rejected (before span.end)", signal);
