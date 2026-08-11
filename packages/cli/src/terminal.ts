@@ -10,7 +10,8 @@ export class TerminalUI {
     constructor(
         private sessionId: string,
         private agentLoop: AgentLoop,
-        private commands: Command[] = []
+        private commands: Command[] = [],
+        private model: string
     ) {}
 
     async start(): Promise<void> {
@@ -32,6 +33,7 @@ export class TerminalUI {
                     sessionId: this.sessionId,
                     agentLoop: this.agentLoop,
                     commands: this.commands,
+                    model: this.model,
                 })
             );
             logger.info(`Terminal UI mounted (sessionId=${this.sessionId})`);

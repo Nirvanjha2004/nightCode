@@ -4,7 +4,6 @@ const C = {
     blue:     "#89B4FA",
     mauve:    "#CBA6F7",
     text:     "#CDD6F4",
-    subtitle: "#6B6B7B",
     surface2: "#222233",
 };
 
@@ -40,14 +39,6 @@ export function Header() {
                 gap={2}
                 alignItems="center"
             >
-                {/* Status dot */}
-                <box flexDirection="row" gap={1} alignItems="center">
-                    <text fg={C.blue}>●</text>
-                    <text fg={C.subtitle} attributes={TextAttributes.DIM}>
-                        connected
-                    </text>
-                </box>
-
                 <text attributes={TextAttributes.DIM} fg={C.surface2}>
                     |
                 </text>

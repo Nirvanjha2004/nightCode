@@ -1,53 +1,77 @@
 import { TextAttributes } from "@opentui/core";
+import { homedir } from "node:os";
 
 const C = {
-    green:    "#A6E3A1",
-    subtitle: "#6B6B7B",
     blue:     "#89B4FA",
-    text:     "#CDD6F4",
+    subtitle: "#6B6B7B",
+    green:    "#A6E3A1",
+    yellow:   "#F9E2AF",
     peach:    "#FAB387",
+    red:      "#F38BA8",
+};
+
+/** Lifecycle of the agent loop as seen from the UI. */
+export type AgentStatus = "ready" | "running" | "cancelled" | "error";
+
+const STATUS_COLOR: Record<AgentStatus, string> = {
+    ready:     C.green,
+    running:   C.yellow,
+    cancelled: C.peach,
+    error:     C.red,
+};
+
+const STATUS_LABEL: Record<AgentStatus, string> = {
+    ready:     "Ready",
+    running:   "Running",
+    cancelled: "Cancelled",
+    error:     "Error",
 };
 
 type StatusBarProps = {
-    model?: string;
-    chars?: number;
+    model: string;
+    cwd: string;
+    status: AgentStatus;
 };
 
-export function StatusBar({ model = "groq", chars = 0 }: StatusBarProps) {
+// Compact path for small terminals: `~/…` for the home dir, then the last two
+// segments with an ellipsis prefix if the path is still too long to fit.
+function compactPath(p: string, maxLen: number): string {
+    const home = homedir().replace(/\\/g, "/");
+    const norm = p.replace(/\\/g, "/");
+    const withTilde = norm.startsWith(home) ? `~${norm.slice(home.length)}` : norm;
+    if (withTilde.length <= maxLen) return withTilde;
+    const tail = withTilde.split("/").filter(Boolean).slice(-2).join("/");
+    return tail.length < withTilde.length ? `…/${tail}` : withTilde;
+}
+
+export function StatusBar({ model, cwd, status }: StatusBarProps) {
     return (
         <box
             flexDirection="row"
-            justifyContent="space-between"
+            gap={1}
             alignItems="center"
             width="100%"
         >
-            {/* Left: context info */}
-            <box flexDirection="row" gap={2}>
-                <text fg={C.blue} attributes={TextAttributes.BOLD}>
-                    Build
-                </text>
+            {/* Model · Working Directory · Current State */}
+            <text attributes={TextAttributes.BOLD} fg={C.blue}>
+                {model}
+            </text>
 
-                <text attributes={TextAttributes.DIM} fg={C.subtitle}>
-                    {chars} chars
-                </text>
-            </box>
+            <text attributes={TextAttributes.DIM} fg={C.subtitle}>
+                ·
+            </text>
 
-            {/* Right: model name */}
-            <box flexDirection="row" gap={1} alignItems="center">
-                <text attributes={TextAttributes.DIM} fg={C.subtitle}>
-                    model:
-                </text>
-                <box
-                    border={true}
-                    borderStyle="rounded"
-                    borderColor={C.green}
-                    paddingX={1}
-                >
-                    <text fg={C.green} attributes={TextAttributes.DIM}>
-                        {model}
-                    </text>
-                </box>
-            </box>
+            <text attributes={TextAttributes.DIM} fg={C.subtitle}>
+                {compactPath(cwd, 40)}
+            </text>
+
+            <text attributes={TextAttributes.DIM} fg={C.subtitle}>
+                ·
+            </text>
+
+            <text attributes={TextAttributes.BOLD} fg={STATUS_COLOR[status]}>
+                {STATUS_LABEL[status]}
+            </text>
         </box>
     );
 }

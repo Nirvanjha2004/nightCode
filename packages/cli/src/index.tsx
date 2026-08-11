@@ -8,6 +8,7 @@ import "./telemetry";
 import type { AgentLoop } from "../src/agent/loop";
 import type { AgentEvent, ConfirmHook } from "./agent/types";
 import type { Command } from "../components/commands-menu/types";
+import type { AgentStatus } from "../components/status-bar";
 import { logger } from "./logger";
 // Display-only — agent context lives in backend MessageManager, not here
 type DisplayMessage = {
@@ -19,6 +20,7 @@ type DisplayMessage = {
 type Props = {
     sessionId: string;
     agentLoop: AgentLoop;
+    model: string;
     /** Slash commands loaded from the backend registry, suggested while typing. */
     commands: Command[];
 };
@@ -228,9 +230,13 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
 }
 
 // ── Main App ───────────────────────────────────────────────────────────────────
-export function App({ sessionId, agentLoop, commands }: Props) {
+// The working directory NightCode was launched from — constant for the session.
+const CWD = process.cwd();
+
+export function App({ sessionId, agentLoop, commands, model }: Props) {
     const [messages, setMessages] = useState<DisplayMessage[]>([]);
     const [loading, setLoading] = useState(false);
+    const [status, setStatus] = useState<AgentStatus>("ready");
     const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
     const pendingRef = useRef(pendingConfirm);
     pendingRef.current = pendingConfirm;
@@ -380,6 +386,7 @@ export function App({ sessionId, agentLoop, commands }: Props) {
         logger.info(`[UI] User submitted: "${trimmed.slice(0, 100)}"`);
         push("user", trimmed);
         setLoading(true);
+        setStatus("running");
         // A fresh run restarts the ^C^C exit window — Ctrl+C here is the first
         // press of the new run, not a double-press left over from a prior one.
         lastCancelTsRef.current = 0;
@@ -394,6 +401,7 @@ export function App({ sessionId, agentLoop, commands }: Props) {
             });
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
+            setStatus("ready");
         } catch (err) {
             setLiveTool(null); // an aborted run may have left a ghost tool row
             // Cancellation is NOT an error: the activity feed shows "⚠ Cancelled",
@@ -401,12 +409,14 @@ export function App({ sessionId, agentLoop, commands }: Props) {
             if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
                 logger.info("[UI] Agent run cancelled");
                 handleAgentEvent({ type: "cancelled" });
+                setStatus("cancelled");
             } else {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 logger.error(`[UI] Agent execution failed: ${errMsg}`, {
                     stack: err instanceof Error ? err.stack : undefined,
                 });
                 push("error", errMsg);
+                setStatus("error");
             }
         } finally {
             // A finished run can no longer be cancelled by a late keypress.
@@ -520,6 +530,9 @@ export function App({ sessionId, agentLoop, commands }: Props) {
                     onSubmit={handleSubmit}
                     disabled={loading || !!pendingConfirm}
                     commands={commands}
+                    model={model}
+                    cwd={CWD}
+                    status={status}
                 />
             </box>
         </box>

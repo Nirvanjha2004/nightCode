@@ -2,7 +2,7 @@ import { useRef, useCallback } from "react";
 import type { TextareaRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { StatusBar } from "./status-bar";
+import { StatusBar, type AgentStatus } from "./status-bar";
 import { CommandMenu } from "./commands-menu";
 import { useCommandMenu } from "./commands-menu/use-command-menu";
 import type { Command } from "./commands-menu/types";
@@ -23,12 +23,14 @@ const C = {
 type Props = {
     onSubmit: (text: string) => void;
     disabled?: boolean;
-    model?: string;
+    model: string;
+    cwd: string;
+    status: AgentStatus;
     /** Commands to suggest in the menu (slash commands from the backend registry). */
     commands: Command[];
 };
 
-export function InputBar({ onSubmit, disabled = false, model = "groq", commands }: Props) {
+export function InputBar({ onSubmit, disabled = false, model, cwd, status, commands }: Props) {
     const textareaRef = useRef<TextareaRenderable>(null);
     const scrollRef   = useRef<ScrollBoxRenderable | null>(null);
     const cmd         = useCommandMenu(commands);
@@ -191,7 +193,7 @@ export function InputBar({ onSubmit, disabled = false, model = "groq", commands 
                     }
                 />
 
-                <StatusBar model={model} chars={textareaRef.current?.plainText?.length ?? 0} />
+                <StatusBar model={model} cwd={cwd} status={status} />
             </box>
         </box>
     );

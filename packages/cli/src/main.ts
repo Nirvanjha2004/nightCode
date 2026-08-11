@@ -119,9 +119,10 @@ async function main() {
     //      into the SAME loop instance to run nested, isolated sub-sessions.
     harness.agentLoop = agentLoop;
 
-    // 7. Create a session before UI starts
+    // 7. Create a session before UI starts — the model is also shown in the status bar
+    const sessionModel = "qwen/qwen3.6-27b";
     const sessionId = sessionManager.create({
-        model: "qwen/qwen3.6-27b",
+        model: sessionModel,
     });
     logger.info(`Session created: ${sessionId}`);
 
@@ -134,7 +135,7 @@ async function main() {
         description: command.description ?? command.argumentHint ?? "",
         value: `/${command.name}`,
     }));
-    const ui = new TerminalUI(sessionId, agentLoop, slashCommands);
+    const ui = new TerminalUI(sessionId, agentLoop, slashCommands, sessionModel);
     await ui.start();
 }
 
