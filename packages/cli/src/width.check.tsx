@@ -89,7 +89,14 @@ async function renderApp(width: number, height: number) {
     const loop = makeLoop();
     const setup = await testRender(
         <box width="100%" height="100%">
-            <App sessionId="s1" agentLoop={loop as never} commands={[]} model="groq/llama-3.3-70b" />
+            <App
+                sessionId="s1"
+                sessionNumber={1}
+                agentLoop={loop as never}
+                commands={[]}
+                model="groq/llama-3.3-70b"
+                onResetSession={() => ({ sessionId: "s1", sessionNumber: 1 })}
+            />
         </box>,
         { width, height }
     );

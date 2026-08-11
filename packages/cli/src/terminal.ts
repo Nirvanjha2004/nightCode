@@ -11,7 +11,9 @@ export class TerminalUI {
         private sessionId: string,
         private agentLoop: AgentLoop,
         private commands: Command[] = [],
-        private model: string
+        private model: string,
+        private sessionNumber: number = 1,
+        private onResetSession: () => { sessionId: string; sessionNumber: number }
     ) {}
 
     async start(): Promise<void> {
@@ -31,9 +33,11 @@ export class TerminalUI {
             createRoot(renderer).render(
                 createElement(App, {
                     sessionId: this.sessionId,
+                    sessionNumber: this.sessionNumber,
                     agentLoop: this.agentLoop,
                     commands: this.commands,
                     model: this.model,
+                    onResetSession: this.onResetSession,
                 })
             );
             logger.info(`Terminal UI mounted (sessionId=${this.sessionId})`);

@@ -31,6 +31,8 @@ type StatusBarProps = {
     model: string;
     cwd: string;
     status: AgentStatus;
+    /** Human-friendly session counter (1, 2, …) — the "one current session" indicator. */
+    sessionNumber: number;
 };
 
 // Compact path for small terminals: `~/…` for the home dir, then the last two
@@ -44,7 +46,7 @@ function compactPath(p: string, maxLen: number): string {
     return tail.length < withTilde.length ? `…/${tail}` : withTilde;
 }
 
-export function StatusBar({ model, cwd, status }: StatusBarProps) {
+export function StatusBar({ model, cwd, status, sessionNumber }: StatusBarProps) {
     return (
         <box
             flexDirection="row"
@@ -66,6 +68,14 @@ export function StatusBar({ model, cwd, status }: StatusBarProps) {
 
             <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" truncate>
                 {compactPath(cwd, 40)}
+            </text>
+
+            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" flexShrink={0}>
+                ·
+            </text>
+
+            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" truncate>
+                session {sessionNumber}
             </text>
 
             <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" flexShrink={0}>

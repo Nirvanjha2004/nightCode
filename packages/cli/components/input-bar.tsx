@@ -26,11 +26,13 @@ type Props = {
     model: string;
     cwd: string;
     status: AgentStatus;
+    /** Human-friendly session counter shown in the status bar. */
+    sessionNumber: number;
     /** Commands to suggest in the menu (slash commands from the backend registry). */
     commands: Command[];
 };
 
-export function InputBar({ onSubmit, disabled = false, model, cwd, status, commands }: Props) {
+export function InputBar({ onSubmit, disabled = false, model, cwd, status, sessionNumber, commands }: Props) {
     const textareaRef = useRef<TextareaRenderable>(null);
     const scrollRef   = useRef<ScrollBoxRenderable | null>(null);
     const cmd         = useCommandMenu(commands);
@@ -193,7 +195,7 @@ export function InputBar({ onSubmit, disabled = false, model, cwd, status, comma
                     }
                 />
 
-                <StatusBar model={model} cwd={cwd} status={status} />
+                <StatusBar model={model} cwd={cwd} status={status} sessionNumber={sessionNumber} />
             </box>
         </box>
     );

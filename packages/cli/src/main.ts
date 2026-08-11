@@ -121,21 +121,42 @@ async function main() {
 
     // 7. Create a session before UI starts — the model is also shown in the status bar
     const sessionModel = "qwen/qwen3.6-27b";
-    const sessionId = sessionManager.create({
+    let sessionId = sessionManager.create({
         model: sessionModel,
     });
-    logger.info(`Session created: ${sessionId}`);
+    let sessionNumber = 1;
+    logger.info(`Session created: ${sessionId} (#${sessionNumber})`);
+
+    // /clear — start a FRESH conversation. Only session state is touched: the
+    // old session's message history and its session record are dropped, and a
+    // brand-new session is created (fresh message history + fresh context
+    // summary). Files, Git state, and memory files are never touched.
+    const resetSession = (): { sessionId: string; sessionNumber: number } => {
+        messageManager.delete(sessionId);
+        sessionManager.delete(sessionId);
+        sessionId = sessionManager.create({ model: sessionModel });
+        sessionNumber += 1;
+        logger.info(`[Session] Reset — started fresh session: ${sessionId} (#${sessionNumber})`);
+        return { sessionId, sessionNumber };
+    };
 
     // 8. Hand off to UI — the command menu suggests the loaded slash commands
-    //    (name + description) as the user types; built-in UI commands are merged
-    //    in the frontend.
+    //    (name + description) as the user types, plus the built-in UI command
+    //    /clear (intercepted by the frontend; it never reaches the agent loop).
     logger.info("Starting Terminal UI...");
-    const slashCommands: Command[] = commandRegistry.list().map((command) => ({
-        name: command.name,
-        description: command.description ?? command.argumentHint ?? "",
-        value: `/${command.name}`,
-    }));
-    const ui = new TerminalUI(sessionId, agentLoop, slashCommands, sessionModel);
+    const slashCommands: Command[] = [
+        {
+            name: "clear",
+            description: "Start a fresh session (clears the conversation context)",
+            value: "/clear",
+        },
+        ...commandRegistry.list().map((command) => ({
+            name: command.name,
+            description: command.description ?? command.argumentHint ?? "",
+            value: `/${command.name}`,
+        })),
+    ];
+    const ui = new TerminalUI(sessionId, agentLoop, slashCommands, sessionModel, sessionNumber, resetSession);
     await ui.start();
 }
 

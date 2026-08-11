@@ -44,7 +44,14 @@ async function main() {
 
     const setup = await testRender(
         <box width="100%" height="100%">
-            <App sessionId="s1" agentLoop={loop as never} commands={[]} model="test" />
+            <App
+                sessionId="s1"
+                sessionNumber={1}
+                agentLoop={loop as never}
+                commands={[]}
+                model="test"
+                onResetSession={() => ({ sessionId: "s1", sessionNumber: 1 })}
+            />
         </box>,
         { width: 60, height: 20 }
     );

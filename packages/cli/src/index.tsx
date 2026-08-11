@@ -20,10 +20,14 @@ type DisplayMessage = {
 
 type Props = {
     sessionId: string;
+    /** Human-friendly session counter (1, 2, …) — shown in the status bar. */
+    sessionNumber: number;
     agentLoop: AgentLoop;
     model: string;
     /** Slash commands loaded from the backend registry, suggested while typing. */
     commands: Command[];
+    /** /clear — swap to a fresh backend session; returns the new session identity. */
+    onResetSession: () => { sessionId: string; sessionNumber: number };
 };
 
 // ── Color palette (Catppuccin Mocha inspired) ─────────────────────────────────
@@ -247,7 +251,13 @@ export function MessageBubble({ msg }: { msg: DisplayMessage }) {
 // The working directory NightCode was launched from — constant for the session.
 const CWD = process.cwd();
 
-export function App({ sessionId, agentLoop, commands, model }: Props) {
+export function App({ sessionId: initialSessionId, sessionNumber: initialSessionNumber, agentLoop, commands, model, onResetSession }: Props) {
+    // The current session is owned here so /clear can swap it without re-mounting
+    // the whole app (the backend swap happens in main via onResetSession).
+    const [sessionId, setSessionId] = useState(initialSessionId);
+    const [sessionNumber, setSessionNumber] = useState(initialSessionNumber);
+    // One-shot transition notice shown in the empty state after /clear.
+    const [notice, setNotice] = useState<string | null>(null);
     const [messages, setMessages] = useState<DisplayMessage[]>([]);
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState<AgentStatus>("ready");
@@ -413,6 +423,25 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
         const trimmed = text.trim();
         if (!trimmed || loading) return;
 
+        // ── /clear — start a fresh session (UI command; never reaches the agent) ──
+        // The backend swaps to a brand-new session (fresh message history and
+        // context summary); the on-screen conversation is reset here. Repository
+        // files, Git state, and memory files are untouched — only session state.
+        // First-token match (like resolveSlashCommand): "/clear anything" still
+        // clears — a fresh session takes no arguments.
+        if (trimmed.split(/\s+/)[0] === "/clear") {
+            const next = onResetSession();
+            setSessionId(next.sessionId);
+            setSessionNumber(next.sessionNumber);
+            setMessages([]);
+            setActivity([]);
+            setLiveTool(null);
+            setStatus("ready");
+            setNotice("Session cleared. Starting a new conversation.");
+            logger.info(`[UI] /clear — fresh session: ${next.sessionId} (#${next.sessionNumber})`);
+            return;
+        }
+
         logger.info(`[UI] User submitted: "${trimmed.slice(0, 100)}"`);
         push("user", trimmed);
         setLoading(true);
@@ -453,7 +482,7 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
             abortRef.current = null;
             setLoading(false);
         }
-    }, [loading, sessionId, agentLoop, buildConfirmHook, handleAgentEvent]);
+    }, [loading, sessionId, agentLoop, buildConfirmHook, handleAgentEvent, onResetSession]);
 
     return (
         <box
@@ -495,9 +524,15 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
                         <text fg={C.subtitle} attributes={TextAttributes.DIM}>
                             ✦  Welcome to NightCode  ✦
                         </text>
-                        <text fg={C.overlay1} attributes={TextAttributes.DIM}>
-                            Ask something to get started
-                        </text>
+                        {notice ? (
+                            <text fg={C.green} attributes={TextAttributes.BOLD}>
+                                {notice}
+                            </text>
+                        ) : (
+                            <text fg={C.overlay1} attributes={TextAttributes.DIM}>
+                                Ask something to get started
+                            </text>
+                        )}
                     </box>
                 )}
 
@@ -563,6 +598,7 @@ export function App({ sessionId, agentLoop, commands, model }: Props) {
                     model={model}
                     cwd={CWD}
                     status={status}
+                    sessionNumber={sessionNumber}
                 />
             </box>
         </box>
