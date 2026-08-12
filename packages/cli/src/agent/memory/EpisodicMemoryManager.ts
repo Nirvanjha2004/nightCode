@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import type { EpisodicMemory } from "./types";
+import { MEMORY_DIR } from "../../paths";
 
 export class EpisodicMemoryManager {
   private memoryCache: EpisodicMemory[] = [];
@@ -10,7 +11,7 @@ export class EpisodicMemoryManager {
   private readonly jinaModel: string;
 
   constructor(
-    episodicFile = "memory/episodic/events.jsonl",
+    episodicFile = path.join(MEMORY_DIR, "episodic", "events.jsonl"),
     jinaModel = "jina-embeddings-v3"
   ) {
     this.episodicFile = episodicFile;

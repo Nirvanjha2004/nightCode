@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { MEMORY_DIR } from "../../paths";
 
 interface ProceduralRule {
   id: number;
@@ -13,7 +14,7 @@ export class ProceduralMemoryManager {
   private readonly filePath: string;
   private nextId = 1;
 
-  constructor(filePath = "memory/procedural.md") {
+  constructor(filePath = path.join(MEMORY_DIR, "procedural.md")) {
     this.filePath = filePath;
 
     const dir = path.dirname(this.filePath);

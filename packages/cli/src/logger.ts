@@ -1,10 +1,11 @@
 import winston from "winston";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { LOGS_DIR } from "./paths";
 
 // ── Log directory ───────────────────────────────────────────────────────────
-// Can be overridden via LOG_DIR env var; defaults to <project-root>/logs
-const LOG_DIR = process.env.LOG_DIR || join(process.cwd(), "logs");
+// Pinned to <repo-root>/logs — logs are never written anywhere else.
+const LOG_DIR = LOGS_DIR;
 mkdirSync(LOG_DIR, { recursive: true });
 
 // ── Formatters ──────────────────────────────────────────────────────────────

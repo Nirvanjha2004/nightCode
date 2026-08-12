@@ -14,7 +14,7 @@ coverage
 logs
 *.log
 
-# runtime-generated agent memory (seed data lives in packages/cli/memory)
+# runtime-generated agent memory (root memory/ is created on first run)
 /memory
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 

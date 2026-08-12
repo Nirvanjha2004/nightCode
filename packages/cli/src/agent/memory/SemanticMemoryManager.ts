@@ -1,11 +1,12 @@
 import fs from "fs";
 import path from "path";
+import { MEMORY_DIR } from "../../paths";
 
 export class SemanticMemoryManager {
   private facts: Record<string, any> = {};
   private readonly filePath: string;
 
-  constructor(filePath = "memory/semantic.json") {
+  constructor(filePath = path.join(MEMORY_DIR, "semantic.json")) {
     this.filePath = filePath;
 
     const dir = path.dirname(this.filePath);

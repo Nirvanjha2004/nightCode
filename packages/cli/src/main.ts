@@ -9,6 +9,8 @@ import { GroqClient } from "./llm-client/groq-client";
 import { TerminalUI } from "./terminal";
 import type { Command } from "../components/commands-menu/types";
 import { logger } from "./logger";
+import { join } from "node:path";
+import { PROJECT_ROOT } from "./paths";
 
 //// Tools — all 14, not just 3
 import {
@@ -89,7 +91,9 @@ async function main() {
     // Command registry — created and loaded ONCE at startup (not per message).
     // Slash commands resolve to prompt templates + optional tool scope.
     const commandRegistry = new CommandRegistry();
-    await commandRegistry.loadFromDir("commands");
+    // Bundled slash commands always come from the repo root, regardless of
+    // which directory the CLI was launched from.
+    await commandRegistry.loadFromDir(join(PROJECT_ROOT, "commands"));
     logger.info(`Command registry loaded — ${commandRegistry.list().length} command(s)`);
 
     // 4. Harness — bundles everything the loop needs
