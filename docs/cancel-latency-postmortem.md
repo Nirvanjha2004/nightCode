@@ -1,7 +1,7 @@
 # Postmortem — 8-second cancellation latency (Ctrl+C / Esc)
 
 **Severity:** Medium (UX) — cancellation *worked*, but "⚠ Cancelled" took 8–10 s to appear.
-**Environment:** NightCode CLI on Windows, running under Bun (`bun run --watch`), `groq-sdk@1.4.0`, model `qwen/qwen3.6-27b`.
+**Environment:** NightCode CLI on Windows, running under Bun (`bun run --watch`), `groq-sdk@1.4.0`, model `llama-3.3-70b-versatile`.
 **Outcome:** Root cause was in **Bun's fetch runtime**, not our code. Fixed with an **abort watchdog** that forces the rejection at the layer we control.
 
 ---
@@ -241,7 +241,7 @@ await p; // measure time from abort() to rejection
 
 ```
 [llama-3.1-8b-instant] rejected ~20ms after abort fired — "Request was aborted."
-[qwen/qwen3.6-27b]    rejected ~20ms after abort fired — "Request was aborted."
+[llama-3.3-70b-versatile]    rejected ~20ms after abort fired — "Request was aborted."
 ```
 
 Then the exact app request shape (15 real tools, `tool_choice`, no `max_tokens`, real system prompt extracted from `context.ts`, abort at 1.5 s):

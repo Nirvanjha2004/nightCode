@@ -114,7 +114,7 @@ async function main() {
         const agentLoop = new AgentLoop(harness, llm, 5);
         harness.agentLoop = agentLoop;
 
-        const parentSessionId = sessionManager.create({ model: "qwen/qwen3.6-27b" });
+        const parentSessionId = sessionManager.create({ model: "llama-3.3-70b-versatile" });
         const result = await agentLoop.execute(parentSessionId, "Find all files that import './auth'");
 
         // ── Assertions ─────────────────────────────────────────────────

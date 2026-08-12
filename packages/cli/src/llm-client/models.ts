@@ -145,7 +145,7 @@ const GOOGLE: ModelSpec[] = [
 
 // ── Groq (default provider — the models NightCode shipped with) ──────────
 const GROQ: ModelSpec[] = [
-    m("qwen/qwen3.6-27b", "groq", { contextWindow: 131_072, maxOutputTokens: 12_288 }),
+    m("llama-3.3-70b-versatile", "groq", { contextWindow: 131_072, maxOutputTokens: 12_288 }),
     m("llama-3.1-8b-instant", "groq", { contextWindow: 131_072, maxOutputTokens: 8192 }),
     m("llama-3.3-70b-versatile", "groq", { contextWindow: 131_072, maxOutputTokens: 32_768 }),
     m("deepseek-r1-distill-llama-70b", "groq", { contextWindow: 131_072, reasoning: true, maxOutputTokens: 16_384 }),

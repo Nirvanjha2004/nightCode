@@ -80,7 +80,7 @@ async function main() {
 
         // groq catalog includes the model NightCode shipped with
         const groqModels = system.registry.get("groq")!.listModels();
-        assert.ok(groqModels.some((m) => m.id === "qwen/qwen3.6-27b"), "groq catalog keeps qwen/qwen3.6-27b");
+        assert.ok(groqModels.some((m) => m.id === "llama-3.3-70b-versatile"), "groq catalog keeps llama-3.3-70b-versatile");
         assert.equal(system.registry.get("groq")!.summarizerModel(), "llama-3.1-8b-instant", "groq summarizer model preserved");
 
         // ── auto-selection priority: openai when only OPENAI_API_KEY set ──
@@ -158,7 +158,7 @@ async function main() {
         for (const k of ENV_KEYS) delete process.env[k];
         writeFileSync(
             legacyPath,
-            JSON.stringify({ provider: "groq", model: "qwen/qwen3.6-27b", apiKey: "gsk-legacy" })
+            JSON.stringify({ provider: "groq", model: "llama-3.3-70b-versatile", apiKey: "gsk-legacy" })
         );
         const oldPath2 = process.env.NIGHTCODE_CONFIG;
         process.env.NIGHTCODE_CONFIG = legacyPath;

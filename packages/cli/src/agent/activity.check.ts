@@ -185,7 +185,7 @@ async function main() {
         const agentLoop = new AgentLoop(harness, llm, 5);
         harness.agentLoop = agentLoop;
 
-        const sessionId = sessionManager.create({ model: "qwen/qwen3.6-27b" });
+        const sessionId = sessionManager.create({ model: "llama-3.3-70b-versatile" });
         await agentLoop.execute(sessionId, "do the thing", {
             onEvent: (e) => events.push(e),
         });

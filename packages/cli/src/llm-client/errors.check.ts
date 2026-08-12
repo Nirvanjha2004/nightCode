@@ -37,7 +37,7 @@ async function main() {
 
     const modelErr = classifyHttpError({
         status: 400,
-        body: JSON.stringify({ error: { message: "The model `qwen/qwen3.6-27b` does not exist" } }),
+        body: JSON.stringify({ error: { message: "The model `llama-3.3-70b-versatile` does not exist" } }),
     });
     assert.ok(modelErr instanceof ModelNotFoundError, "model-not-found message → ModelNotFoundError");
 

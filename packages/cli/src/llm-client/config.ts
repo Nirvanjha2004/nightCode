@@ -56,7 +56,7 @@ export type NightCodeConfig = {
     providers: Record<string, CustomProviderConfig>;
 };
 
-export const DEFAULT_MODEL = "qwen/qwen3.6-27b";
+export const DEFAULT_MODEL = "llama-3.3-70b-versatile";
 export const DEFAULT_PROVIDER = "groq";
 
 function defaultConfig(): NightCodeConfig {
