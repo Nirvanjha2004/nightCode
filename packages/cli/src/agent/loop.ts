@@ -21,10 +21,10 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
- * Tee a provider's normalized stream: text deltas are forwarded to the UI
- * live (Pi-style incremental rendering) while the stream is still consumed
- * by collectResponse to rebuild the same full response chat() would return.
- * Response semantics are identical to the old non-streaming path.
+ * Tee a provider's normalized stream: text and reasoning deltas are forwarded
+ * to the UI live (Pi-style incremental rendering) while the stream is still
+ * consumed by collectResponse to rebuild the same full response chat() would
+ * return. Response semantics are identical to the old non-streaming path.
  */
 async function* forwardTextDeltas(
     stream: AsyncGenerator<LLMEvent>,
@@ -33,6 +33,8 @@ async function* forwardTextDeltas(
     for await (const event of stream) {
         if (event.type === "text_delta") {
             onEvent?.({ type: "text_delta", text: event.text });
+        } else if (event.type === "reasoning_delta") {
+            onEvent?.({ type: "reasoning_delta", text: event.text });
         }
         yield event;
     }

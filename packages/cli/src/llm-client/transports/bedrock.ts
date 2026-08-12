@@ -222,11 +222,14 @@ export class BedrockProvider implements LLMProvider {
                     yield { type: "tool_call_start", index, id: tu.toolUseId ?? `call_${index}`, name: tu.name ?? "" };
                 }
             } else if (json.contentBlockDelta) {
-                const delta = json.contentBlockDelta as { contentBlockIndex?: number; delta?: { text?: string; toolUse?: { toolUseId?: string; name?: string; input?: string } } };
+                const delta = json.contentBlockDelta as { contentBlockIndex?: number; delta?: { text?: string; reasoningContent?: { text?: string }; toolUse?: { toolUseId?: string; name?: string; input?: string } } };
                 const index = delta.contentBlockIndex ?? 0;
                 const d = delta.delta;
                 if (d?.text) {
                     yield { type: "text_delta", text: d.text };
+                } else if (d?.reasoningContent?.text) {
+                    // Bedrock Converse streams reasoning (Nova / Claude thinking) here.
+                    yield { type: "reasoning_delta", text: d.reasoningContent.text };
                 } else if (d?.toolUse) {
                     let entry = toolUses.get(index);
                     if (!entry) {

@@ -313,6 +313,9 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
     // streaming). Rendered in the same slot the final message lands in, then
     // replaced by it when the run resolves.
     const [streaming, setStreaming] = useState<{ id: string; text: string } | null>(null);
+    // Live reasoning/thinking text — appended as reasoning_delta events arrive,
+    // shown in a dimmed panel while the model works, discarded on completion.
+    const [reasoning, setReasoning] = useState("");
 
     // Tick the live tool row's elapsed counter once a second.
     useEffect(() => {
@@ -339,12 +342,32 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             setActivity((prev) => [...prev, event]);
             return;
         }
+        if (event.type === "reasoning_delta") {
+            // Append to the thinking panel; cap it so a huge extended-thinking
+            // block can't grow the render tree without bound.
+            setReasoning((prev) => {
+                if (prev.endsWith("… (reasoning truncated)")) return prev;
+                const next = prev + event.text;
+                return next.length > 12000
+                    ? next.slice(0, 12000) + "\n… (reasoning truncated)"
+                    : next;
+            });
+            return;
+        }
         if (event.type === "text_delta") {
             // Append to the live assistant bubble (create it on first delta).
             setStreaming((prev) => ({
                 id: prev?.id ?? crypto.randomUUID(),
                 text: (prev?.text ?? "") + event.text,
             }));
+            setReasoning(""); // the answer is starting — collapse the thinking panel
+            return;
+        }
+        if (event.type === "iteration") {
+            // A new ReAct iteration means a fresh model call — its thinking
+            // replaces the previous block instead of concatenating onto it.
+            setActivity((prev) => [...prev, event]);
+            setReasoning("");
             return;
         }
         setActivity((prev) => [...prev, event]);
@@ -473,6 +496,7 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             setActivity([]);
             setLiveTool(null);
             setStreaming(null);
+            setReasoning("");
             setStatus("ready");
             setNotice("Session cleared. Starting a new conversation.");
             logger.info(`[UI] /clear — fresh session: ${next.sessionId} (#${next.sessionNumber})`);
@@ -498,10 +522,12 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
             setStreaming(null); // the live bubble becomes the stored message
+            setReasoning(""); // the thinking panel is display-only
             setStatus("ready");
         } catch (err) {
             setLiveTool(null); // an aborted run may have left a ghost tool row
             setStreaming(null); // discard any partially-streamed reply
+            setReasoning(""); // …and any partial thinking
             // Cancellation is NOT an error: the activity feed shows "⚠ Cancelled",
             // and the session stays usable for the next prompt.
             if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
@@ -616,7 +642,19 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
                     </box>
                 )}
 
-                {loading && !liveTool && !streaming && (
+                {/* Live reasoning/thinking panel — the model's thoughts as they happen */}
+                {reasoning && loading && (
+                    <box paddingX={2} flexDirection="column" marginBottom={1}>
+                        <text fg={C.mauve} attributes={TextAttributes.DIM}>
+                            💭 thinking
+                        </text>
+                        <text fg={C.subtitle} attributes={TextAttributes.DIM} wrapMode="word">
+                            {reasoning}
+                        </text>
+                    </box>
+                )}
+
+                {loading && !liveTool && !streaming && !reasoning && (
                     <box paddingX={2} marginBottom={1}>
                         <ThinkingIndicator />
                     </box>

@@ -98,10 +98,20 @@ async function main() {
     await setup.mockInput.typeText("Inspect the authentication flow.");
     await setup.mockInput.pressEnter();
     await setup.waitForVisualIdle();
+
+    // ── 1.5. reasoning renders live in the thinking panel, then is discarded ──
+    await act(async () => {
+        loop.emit({ type: "reasoning_delta", text: "checking the auth token path" });
+    });
+    await setup.waitForVisualIdle();
+    assert.ok(frame().includes("checking the auth token path"), "reasoning text renders live while the model works");
+    assert.ok(frame().includes("thinking"), "thinking panel is labeled");
+
     await act(async () => {
         loop.finish("I inspected auth.ts — the token check looks fine.");
     });
     await setup.waitForVisualIdle();
+    assert.ok(!frame().includes("checking the auth token path"), "thinking panel is discarded when the run completes");
 
     await setup.mockInput.typeText("Now fix the issue you found.");
     await setup.mockInput.pressEnter();

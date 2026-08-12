@@ -171,7 +171,7 @@ async function main() {
                         ],
                     };
                 }
-                return { type: "text", content: "all good" };
+                return { type: "text", content: "all good", reasoning: "step 1; step 2" };
             },
             // The loop consumes stream(), not chat() — delegate and convert.
             stream: async function* (_context: ContextType, _signal?: AbortSignal) {
@@ -259,7 +259,18 @@ async function main() {
             "streamed deltas reassemble the final answer"
         );
 
-        console.log("PASS — activity events stream in order with sane previews; text streams live.");
+        // ── reasoning: thinking text reaches the UI live too ───────────
+        const rDeltas = events.filter(
+            (e): e is Extract<AgentEvent, { type: "reasoning_delta" }> => e.type === "reasoning_delta"
+        );
+        assert.ok(rDeltas.length >= 1, "reasoning streams to the UI as deltas");
+        assert.equal(
+            rDeltas.map((d) => d.text).join(""),
+            "step 1; step 2",
+            "reasoning deltas reassemble the model's thinking"
+        );
+
+        console.log("PASS — activity events stream in order with sane previews; text and reasoning stream live.");
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }

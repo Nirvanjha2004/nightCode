@@ -42,13 +42,14 @@ Three moving parts:
 
 2. **`agent/loop.ts` — stream consumption.** Each ReAct iteration now calls
    `this.llm.stream(context, signal)` instead of `chat()`. A small tee
-   (`forwardTextDeltas`) forwards `text_delta` events to the UI **as they
-   arrive**, while `collectResponse` (unchanged, in `llm-client/stream.ts`)
-   consumes the same stream to rebuild the full response: text is
-   accumulated, tool calls are assembled by index (and parsed with a
-   `ToolCallingError` on malformed arguments), and a `tool_calls` response
-   wins when any tool call was made. History storage, the tool-call flow, and
-   cancellation semantics are byte-for-byte the same as before.
+   (`forwardTextDeltas`) forwards `text_delta` and `reasoning_delta` events to
+   the UI **as they arrive**, while `collectResponse` (unchanged, in
+   `llm-client/stream.ts`) consumes the same stream to rebuild the full
+   response: text and reasoning are accumulated, tool calls are assembled by
+   index (and parsed with a `ToolCallingError` on malformed arguments), and a
+   `tool_calls` response wins when any tool call was made. History storage,
+   the tool-call flow, and cancellation semantics are byte-for-byte the same
+   as before.
 
 3. **`ui/index.tsx` — live rendering.** A `text_delta` event creates (or
    appends to) a **streaming bubble** rendered in exactly the slot the final
@@ -62,14 +63,19 @@ Three moving parts:
 | Event | Streamed to the UI? |
 |---|---|
 | `text_delta` | ✅ Rendered live as markdown in the assistant bubble |
-| `reasoning_delta` | ❌ Normalized, not rendered (no thinking panel yet — roadmap) |
+| `reasoning_delta` | ✅ Rendered live in a dimmed `💭 thinking` panel (capped at 12k chars), discarded when the run completes |
 | `tool_call_start/delta/end` | ⏳ Tools already appear live in the activity feed (`tool_start`/`tool_end`); per-argument typing is not shown |
 | `usage` / `finish` | Consumed by `collectResponse`; not displayed |
 | `error` | Thrown through the stream; surfaced as an Error row |
 
+Every provider maps its own thinking format into `reasoning_delta`: OpenAI
+(`reasoning_content`), Anthropic (`thinking_delta`), Gemini (thinking parts),
+and Bedrock (Converse `reasoningContent` deltas — e.g. Nova / Claude thinking).
+
 Streaming is **display-only**: the backend still stores one complete
 assistant message per final answer, so history, summarization, and memory
-extraction are unaffected.
+extraction are unaffected. The thinking panel is likewise display-only —
+reasoning is never stored in history.
 
 ## Semantics preserved
 

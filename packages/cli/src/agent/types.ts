@@ -156,6 +156,8 @@ export type AgentEvent =
     | { type: "tool_end"; toolName: string; ok: boolean; durationMs: number; resultPreview: string }
     /** A slice of the assistant's reply as it streams (Pi-style live rendering). */
     | { type: "text_delta"; text: string }
+    /** A slice of the model's reasoning/thinking as it streams. */
+    | { type: "reasoning_delta"; text: string }
     | { type: "cancelled" };
 
 // Message types
