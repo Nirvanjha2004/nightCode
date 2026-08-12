@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type Groq from "groq-sdk";
 import { CommandRegistry, resolveSlashCommand } from "./commands";
+import type { LLMResponse } from "../llm-client/types";
 import { ContextBuilder } from "./context";
 import { MessageManager } from "./messages";
 import { SessionManager } from "./session";
@@ -127,9 +127,14 @@ Run git diff. Do NOT modify files.`);
     for (const name of ["read", "write", "edit", "delete", "grep", "bash"]) {
         tr.register(fakeTool(name));
     }
-    // Summarization only triggers past the 100k-token threshold, so this stub
-    // is never actually called.
-    const cb = new ContextBuilder(mm, sm, tr, {} as unknown as Groq);
+    // Summarization only triggers past the context threshold, so this stub is
+    // never actually called.
+    const cb = new ContextBuilder(mm, sm, tr, {
+        chat: async (): Promise<LLMResponse> => ({ type: "text", content: "stub" }),
+        summarizerModel: () => "stub-model",
+        contextLimit: () => 131_072,
+        subagentModel: () => "stub-model",
+    });
     const sessionId = sm.create({ model: "test-model" });
 
     // simulate AgentLoop.execute's flow for "/review"

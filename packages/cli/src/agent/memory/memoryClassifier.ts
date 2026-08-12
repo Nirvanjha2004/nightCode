@@ -1,9 +1,4 @@
-import Groq from "groq-sdk";
-
-// Bun auto-loads .env from project root; single shared lazy instance
-const groq = new Groq({
-    apiKey: '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',
-});
+import type { ChatLLM } from "../../llm-client/types";
 
 export interface ExtractionResult {
     semantic: {
@@ -23,7 +18,9 @@ export interface ExtractionResult {
 }
 
 export async function extractMemories(
-    executionTrace: string
+    executionTrace: string,
+    llm: ChatLLM,
+    model: string
 ): Promise<ExtractionResult> {
     const prompt = `You just observed an AI coding agent's completed task execution below.
 
@@ -48,33 +45,36 @@ Respond ONLY with valid JSON matching this shape, no markdown, no preamble:
 Execution trace:
 ${executionTrace}`;
 
-    const completion = await groq.chat.completions.create({
-        model: "llama-3.1-8b-instant",
-        temperature: 0,
-        response_format: {
-            type: "json_object",
-        },
+    const response = await llm.chat({
+        sessionId: "memory-extraction",
+        model,
+        systemPrompt: "",
         messages: [
             {
+                messageId: "extract",
+                sessionId: "memory-extraction",
                 role: "user",
                 content: prompt,
+                createdAt: new Date(),
             },
         ],
+        tools: [],
+        jsonMode: true,
     });
 
-    const content = completion.choices[0]?.message?.content;
-
+    const content = response.type === "text" ? response.content : "";
     if (!content) {
-        throw new Error("Groq returned an empty response.");
+        throw new Error("The model returned an empty response.");
     }
 
+    // Strip code fences in case the provider ignored jsonMode.
+    const cleaned = content.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+
     try {
-        return JSON.parse(content) as ExtractionResult;
+        return JSON.parse(cleaned) as ExtractionResult;
     } catch (err) {
         throw new Error(
-            `Failed to parse memory extraction JSON.\n\nResponse:\n${content}`
+            `Failed to parse memory extraction JSON.\n\nResponse:\n${cleaned}`
         );
     }
 }
-
-

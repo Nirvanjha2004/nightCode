@@ -7,7 +7,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Groq from "groq-sdk";
 import { MessageManager } from "./messages";
 import { SessionManager } from "./session";
 import { ToolRegistry } from "./registry";
@@ -20,20 +19,19 @@ import { SemanticMemoryManager } from "./memory/SemanticMemoryManager";
 import { ProceduralMemoryManager } from "./memory/ProceduralMemoryManager";
 import { read, grep, spawnSubagent } from "./tools";
 import type { ContextType } from "./types";
-import type { LLMResponse } from "../llm-client/types";
+import type { ChatLLM, LLMResponse } from "../llm-client/types";
 
 async function main() {
     const dir = mkdtempSync(join(tmpdir(), "subagent-check-"));
 
-    // The ContextBuilder's Groq client is only used for context summarization,
+    // The ContextBuilder's LLM is only used for context summarization,
     // which never triggers at this message volume — a stub suffices.
-    const fakeGroq = {
-        chat: {
-            completions: {
-                create: async () => ({ choices: [{ message: { content: "stub" } }] }),
-            },
-        },
-    } as unknown as Groq;
+    const fakeLLM = {
+        chat: async (): Promise<LLMResponse> => ({ type: "text", content: "stub" }),
+        summarizerModel: () => "stub-model",
+        contextLimit: () => 131_072,
+        subagentModel: () => "stub-model",
+    };
 
     try {
         const messageManager = new MessageManager();
@@ -47,7 +45,7 @@ async function main() {
         // Stub out the network call — episodic retrieval is not what this check tests.
         episodicMemory.retrieveRelevantMemories = async () => [];
 
-        const contextBuilder = new ContextBuilder(messageManager, sessionManager, toolRegistry, fakeGroq);
+        const contextBuilder = new ContextBuilder(messageManager, sessionManager, toolRegistry, fakeLLM);
         const commandRegistry = new CommandRegistry();
 
         const harness = new AgentHarness(
@@ -74,7 +72,7 @@ async function main() {
         // Record which tools each call actually saw, keyed by session.
         const seen: Array<{ sessionId: string; tools: string[] }> = [];
         let callCount = 0;
-        const llm = {
+        const llm: ChatLLM = {
             chat: async (context: ContextType): Promise<LLMResponse> => {
                 seen.push({
                     sessionId: context.sessionId,
@@ -98,6 +96,9 @@ async function main() {
                 }
                 return { type: "text", content: callCount === 2 ? "subagent report" : "parent summary" };
             },
+            summarizerModel: () => "stub-model",
+            contextLimit: () => 131_072,
+            subagentModel: () => "stub-model",
         };
 
         const agentLoop = new AgentLoop(harness, llm, 5);

@@ -13,7 +13,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import os from "node:os";
-import Groq from "groq-sdk";
 import { MessageManager } from "./messages";
 import { SessionManager } from "./session";
 import { ToolRegistry } from "./registry";
@@ -25,24 +24,23 @@ import { EpisodicMemoryManager } from "./memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./memory/SemanticMemoryManager";
 import { ProceduralMemoryManager } from "./memory/ProceduralMemoryManager";
 import { bash } from "./tools";
-import { GroqClient } from "../llm-client/groq-client";
+import { OpenAICompatibleProvider } from "../llm-client/transports/openai-compatible";
 import type { ContextType, Tool } from "./types";
-import type { LLMResponse } from "../llm-client/types";
+import type { ChatLLM, LLMResponse } from "../llm-client/types";
 
 const isAbort = (err: unknown) => err instanceof Error && err.name === "AbortError";
 
 async function main() {
     const dir = mkdtempSync(join(tmpdir(), "cancel-check-"));
 
-    // The ContextBuilder's Groq client is only used for context summarization,
+    // The ContextBuilder's LLM is only used for context summarization,
     // which never triggers at this message volume — a stub suffices.
-    const fakeGroq = {
-        chat: {
-            completions: {
-                create: async () => ({ choices: [{ message: { content: "stub" } }] }),
-            },
-        },
-    } as unknown as Groq;
+    const fakeLLM = {
+        chat: async (): Promise<LLMResponse> => ({ type: "text", content: "stub" }),
+        summarizerModel: () => "stub-model",
+        contextLimit: () => 131_072,
+        subagentModel: () => "stub-model",
+    };
 
     function buildHarness(extraTools: Tool[] = []) {
         const messageManager = new MessageManager();
@@ -56,7 +54,7 @@ async function main() {
         // Stub out the network call — episodic retrieval is not what this check tests.
         episodicMemory.retrieveRelevantMemories = async () => [];
 
-        const contextBuilder = new ContextBuilder(messageManager, sessionManager, toolRegistry, fakeGroq);
+        const contextBuilder = new ContextBuilder(messageManager, sessionManager, toolRegistry, fakeLLM);
         const commandRegistry = new CommandRegistry();
         const harness = new AgentHarness(
             messageManager,
@@ -94,7 +92,7 @@ async function main() {
         const { harness, messageManager, sessionManager } = buildHarness([slowTool]);
 
         let llmCalls = 0;
-        const llm = {
+        const llm: ChatLLM = {
             chat: async (_c: ContextType): Promise<LLMResponse> => {
                 llmCalls++;
                 return {
@@ -102,6 +100,9 @@ async function main() {
                     toolCalls: [{ id: "c1", name: "slow_tool", args: {} }],
                 };
             },
+            summarizerModel: () => "stub-model",
+            contextLimit: () => 131_072,
+            subagentModel: () => "stub-model",
         };
         const loop = new AgentLoop(harness, llm, 5);
         harness.agentLoop = loop;
@@ -144,7 +145,7 @@ async function main() {
             },
         };
         const { harness: h2, messageManager: mm2, sessionManager: sm2 } = buildHarness([slowTool2]);
-        const llm2 = {
+        const llm2: ChatLLM = {
             chat: async (_c: ContextType): Promise<LLMResponse> => {
                 return {
                     type: "tool_calls",
@@ -154,6 +155,9 @@ async function main() {
                     ],
                 };
             },
+            summarizerModel: () => "stub-model",
+            contextLimit: () => 131_072,
+            subagentModel: () => "stub-model",
         };
         const loop2 = new AgentLoop(h2, llm2, 5);
         h2.agentLoop = loop2;
@@ -207,44 +211,53 @@ async function main() {
         const elapsed = Date.now() - started;
         assert.ok(elapsed < 3000, `bash child killed promptly on abort (took ${elapsed}ms)`);
 
-        // ── 5. Groq client forwards the AbortSignal; abort is not retried ──
-        const gc = new GroqClient("sk-fake");
-        const inner = (gc as any).client as {
-            chat: {
-                completions: {
-                    create: (params: unknown, opts?: { signal?: AbortSignal }) => Promise<any>;
-                };
-            };
-        };
-        let createCalls = 0;
-        let seenSignal: AbortSignal | undefined;
-        inner.chat.completions.create = async (_params: unknown, opts?: { signal?: AbortSignal }) => {
-            createCalls++;
-            seenSignal = opts?.signal;
-            await new Promise((r) => setTimeout(r, 200));
-            if (opts?.signal?.aborted) throw new Error("Request was aborted.");
-            return { choices: [{ message: { content: "ok" } }] };
-        };
-
-        const groqController = new AbortController();
-        const context: ContextType = {
+        // ── 5. The provider transport forwards the AbortSignal; abort is not retried ──
+        // A local mock server holds the request open; aborting mid-flight must
+        // settle the chat() via the abort watchdog (~ms) and never retry.
+        let requests = 0;
+        const server = Bun.serve({
+            port: 0,
+            async fetch(_req) {
+                requests++;
+                await Bun.sleep(200);
+                return new Response(
+                    'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+                    { headers: { "content-type": "text/event-stream" } }
+                );
+            },
+        });
+        const transport = new OpenAICompatibleProvider(
+            {
+                providerId: "mock",
+                displayName: "Mock",
+                api: "openai-compatible",
+                baseUrl: `http://localhost:${server.port}/v1`,
+                models: [],
+            },
+            "sk-fake"
+        );
+        const abort5 = new AbortController();
+        const context5: ContextType = {
             sessionId: "s",
             model: "m",
             systemPrompt: "",
             messages: [],
             tools: [],
         };
-        const groqPromise = gc.chat(context, groqController.signal);
-        setTimeout(() => groqController.abort(), 20);
+        const started5 = Date.now();
+        const transportPromise = transport.chat(context5, abort5.signal);
+        setTimeout(() => abort5.abort(), 20);
         // Cancellation rejects with CancelledError (name "AbortError", message
         // "Agent run cancelled.") via the abort watchdog — match by name, the
         // same convention as the other abort assertions in this file.
-        await assert.rejects(groqPromise, isAbort, "aborted LLM request rejects");
-        assert.equal(seenSignal, groqController.signal, "AbortSignal reached the request options");
-        assert.equal(createCalls, 1, "aborted request is not retried or repaired");
+        await assert.rejects(transportPromise, isAbort, "aborted LLM request rejects");
+        assert.ok(Date.now() - started5 < 3000, "abort settles quickly via the watchdog");
+        await Bun.sleep(300); // let the orphaned request settle in the background
+        assert.equal(requests, 1, "aborted request is not retried or repaired");
+        server.stop(true);
 
         console.log(
-            "PASS — loop stops between steps on abort, history stays paired, bash kills its child, Groq forwards the AbortSignal."
+            "PASS — loop stops between steps on abort, history stays paired, bash kills its child, the transport forwards the AbortSignal."
         );
     } finally {
         rmSync(dir, { recursive: true, force: true });

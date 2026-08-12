@@ -3,6 +3,7 @@ import type { AgentHarness } from "./agent-harness";
 import { CancelledError } from "./types";
 import type { AgentEvent, ConfirmHook, ToolCall } from "./types";
 import { resolveSlashCommand } from "./commands";
+import type { ChatLLM } from "../llm-client/types";
 import { logger } from "../logger";
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { markSpanError, tracer } from "../telemetry";
@@ -125,7 +126,7 @@ export function summarizeToolFailure(result: string): string {
 export class AgentLoop {
     constructor(
         private harness: AgentHarness,
-        private llm: any,
+        private llm: ChatLLM,
         private maxIterations: number = 10
     ) { }
 

@@ -1,4 +1,3 @@
-import type Groq from "groq-sdk";
 import type { AgentHarness } from "./agent-harness";
 
 // types.ts
@@ -135,6 +134,8 @@ export type EditArgs = {
 export type SessionType = {
     sessionId : string;
     model : string;
+    /** Provider id this session's model belongs to (informational). */
+    provider?: string;
     createdAt : Date;
     updatedAt?: Date;
 }
@@ -172,10 +173,32 @@ export type MessageType = {
 };
 
 // Context types
+
+/**
+ * Neutral tool definition (OpenAI-compatible wire shape). The agent builds
+ * these; provider adapters convert them to their own tool formats.
+ */
+export type ToolDefinition = {
+    type: "function";
+    function: {
+        name: string;
+        description: string;
+        parameters: {
+            type: "object";
+            properties: Record<string, unknown>;
+            required?: string[];
+        };
+    };
+};
+
 export type ContextType = {
     sessionId: string;
     model: string;
     systemPrompt: string;
     messages: MessageType[];
-    tools: Groq.Chat.Completions.ChatCompletionTool[];
+    tools: ToolDefinition[];
+    /** Ask the provider for a structured-JSON response (openai-compatible). */
+    jsonMode?: boolean;
+    /** Normalized reasoning effort for this call (off|low|medium|high|max). */
+    reasoningEffort?: string;
 };

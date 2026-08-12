@@ -31,9 +31,9 @@ Highlights:
 - **Automatic memory** — the agent learns durable facts, reusable rules, and notable events between sessions, stored in the repo root.
 - **Safe by default** — destructive commands pause for explicit confirmation before running.
 - **Cancellable** — `Esc` / `Ctrl+C` stops a run between steps; `^C^C` exits.
-- **Self-checked** — 10 standalone assertion-based check scripts cover loop, tools, cancellation, UI, and memory wiring.
+- **Self-checked** — 13 standalone assertion-based check scripts cover the provider layer (errors, streams, registry, transports incl. SigV4 vectors), loop, tools, cancellation, UI, and memory wiring.
 
-> **Status:** a personal/hobby project, currently single-model (Groq) with no session persistence. See [§5](#5-nightcode-vs-pi-terminal-agent) for an honest comparison against Pi and [§6](#6-whats-left--roadmap) for what's next.
+> **Status:** a personal/hobby project with a provider-neutral LLM layer (25+ providers, BYOK) and no session persistence yet. See [§5](#5-nightcode-vs-pi-terminal-agent) for an honest comparison against Pi and [§6](#6-whats-left--roadmap) for what's next.
 
 ---
 
@@ -43,9 +43,9 @@ Highlights:
 # 1. Install dependencies (bun workspace)
 bun install
 
-# 2. Set the Groq API key
-#    (root .env is auto-loaded by Bun; keys are currently also hardcoded — see §6)
-#    GROQ_API_KEY=...
+# 2. Set API keys — copy .env.example → .env and fill in what you use
+#    (root .env is auto-loaded by Bun; never hardcoded — see docs/providers.md)
+#    GROQ_API_KEY=...        # or any provider's key; the default stays Groq
 
 # 3. Run the CLI
 bun run dev:cli
@@ -93,7 +93,7 @@ bun run packages/cli/src/ui/scroll.check.tsx
 - **Semantic** (`semantic.json`) — durable facts stored as dot-paths (`user.stack.db`).
 - **Procedural** (`procedural.md`) — reusable rules/corrections extracted from completed tasks.
 - **Episodic** (`episodic/events.jsonl`) — notable events embedded via the Jina API, retrieved by cosine similarity.
-- **Extraction** — on each completed turn, a Groq classifier (`llama-3.1-8b-instant`) turns the execution trace into the three categories; extraction is fire-and-forget so it never blocks the response.
+- **Extraction** — on each completed turn, the active provider's cheap `summarizerModel` (Groq default: `llama-3.1-8b-instant`) turns the execution trace into the three categories; extraction is fire-and-forget so it never blocks the response.
 - **Prompt injection** — memory is injected into the system prompt as "Known facts / Learned rules / Relevant past events".
 - **Guard** — the `memory/` tree is off-limits to agent tools (read/write/edit/delete/grep are all blocked).
 
@@ -118,7 +118,7 @@ bun run packages/cli/src/ui/scroll.check.tsx
 
 - **Logging** — winston JSON to `logs/` (combined + error), colorized console to stderr
 - **Tracing** — OpenTelemetry spans across agent/loop/tool/memory with OTLP-HTTP export (`localhost:4318`)
-- **Self-checks** — 10 `*.check.*` scripts (no framework, plain `node:assert` + `@opentui/react/test-utils`) covering activity events, cancellation, commands, tools, subagents, Groq error mapping, markdown, scroll, session UX, and narrow-width layout
+- **Self-checks** — 13 `*.check.*` scripts (no framework, plain `node:assert` + `@opentui/react/test-utils`) covering provider errors, stream normalization, the provider registry, transports (mock servers + SigV4 test vectors), activity events, cancellation, commands, tools, subagents, markdown, scroll, session UX, and narrow-width layout
 - **Repo-root storage** — `memory/`, `logs/`, and `commands/` are anchored to the project root via `src/paths.ts` (module-location-derived), so the CLI behaves identically from any launch directory
 
 ---
@@ -145,13 +145,16 @@ nightCode/
         │   ├── tools.ts            # all 15 tools + destructive guards
         │   ├── memory/             # semantic / procedural / episodic managers + classifier
         │   └── *.check.ts          # agent self-checks
-        ├── llm-client/             # LLMClient interface + GroqClient implementation
+        ├── llm-client/             # provider-neutral LLM layer — registry, router, auth,
+        │   │                       # errors, model catalog + transports/ (docs/providers.md)
+        │   └── transports/         # openai-compatible · anthropic · google · azure · vertex · bedrock
         └── ui/                     # everything the terminal renders
             ├── index.tsx           # App — chat, activity feed, confirm dialog, keyboard
             ├── terminal.ts         # TerminalUI — opentui renderer, mounts App
             ├── markdown.tsx        # markdown renderer
             ├── header.tsx  input-bar.tsx  status-bar.tsx
             ├── commands-menu/      # slash-command autocomplete
+            ├── model-menu/         # provider/model selector (Ctrl+M, search, favorites)
             └── *.check.tsx         # UI self-checks
 ```
 
@@ -166,7 +169,7 @@ main.ts ──► agent ──► llm-client
         logger / paths / telemetry
 ```
 
-**Boot order** (`src/main.ts`): guard API key → construct managers (messages, sessions, tools, memory) → register 15 tools → build context builder, command registry (loads root `commands/`), harness, Groq client, loop → create first session → hand off to `TerminalUI`.
+**Boot order** (`src/main.ts`): load config + build the provider system (friendly boot error if no credentials) → construct managers (messages, sessions, tools, memory) → register 15 tools → build context builder, command registry (loads root `commands/`), harness, LLM router, loop → create first session → hand off to `TerminalUI`.
 
 **How a turn flows:** user input → slash-command resolution → message stored (raw input kept) → memory context built once → ReAct iterations (`context.build` → `llm.chat` → tools) → final text answer stored → fire-and-forget memory extraction. Events (`stage`/`iteration`/`tool_start`/`tool_end`) stream to the UI throughout. Full detail: [`docs/agent-event-flow.md`](docs/agent-event-flow.md).
 
@@ -190,9 +193,9 @@ Pi's #6 rank is **not** explained by its feature list. It is explained by what �
 | What it is | Single terminal coding agent (one package) | Monorepo: agent toolkit + coding-agent CLI (`pi-agent-core`, `pi-ai`, `pi-tui`, `pi-coding-agent`) |
 | Runtime / stack | Bun + TypeScript, React (`@opentui`) | TypeScript, custom differential-rendering TUI (`pi-tui`) |
 | System prompt & tool surface | Large prompt + 15 tools + **full memory dump every turn** | **<1,000-token** core prompt, **7 default tools** (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`), no hidden scaffolding |
-| Model providers | **1** — Groq (`qwen/qwen3.6-27b` main, `llama-3.1-8b-instant` subagent/summarizer) | **20+** — Anthropic, OpenAI, Gemini, Groq, Ollama, Bedrock, OpenRouter, … with unified token normalization |
+| Model providers | **25+** — OpenAI, Anthropic, Gemini, Groq, DeepSeek, Mistral, OpenRouter, Bedrock, Vertex, Azure, Ollama, … one internal interface + per-provider adapters ([docs/providers.md](docs/providers.md)) | **20+** — with unified token normalization |
 | Execution modes | Interactive TUI only | Interactive TUI, print/JSON (pipes), RPC, embeddable SDK |
-| Streaming | ❌ No — full response per turn | ✅ Real-time streaming of thoughts/tools/text |
+| Streaming | ⏳ Providers stream through one normalized event format (text/reasoning/tool deltas); the loop still consumes full responses — incremental UI rendering is on the roadmap (§6) | ✅ Real-time streaming of thoughts/tools/text |
 | Session state | ❌ Linear history, in-memory (lost on exit) | ✅ **Tree-structured DAG** saved as JSONL (`~/.pi/agent/sessions/`), with `/tree`, `/fork`, `/clone`, `/compact` |
 | Context loading | ✅ LLM summarization past ~100k tokens (chained) | ✅ Compaction + branch summarization into structured checkpoints |
 | Memory | ✅ Automatic semantic/procedural/episodic memory (Groq classifier + Jina embeddings), persisted to repo root | No cross-session "fact" memory by default — relies on `AGENTS.md` + skills + compaction |
@@ -215,7 +218,7 @@ Terminal-bench measures **real CLI task completion** — git workflows, package 
 
 | Driver | Pi | NightCode | Leverage for NightCode |
 |---|---|---|---|
-| **Model access** | 20+ providers → can run Claude/GPT-class models | Groq only — `qwen3.6-27b` (mid-tier open model) | 🔥🔥🔥 The single biggest gap. Everything else is noise next to this. |
+| **Model access** | 20+ providers → can run Claude/GPT-class models | **25+ providers** — BYOK: OpenAI, Anthropic, Gemini, Groq, DeepSeek, Mistral, OpenRouter, Bedrock, local (Ollama/vLLM/…) | ✅ Closed — was the single biggest gap |
 | **Harness minimalism** | <1,000-token prompt, 7 tools, transparent channel to the shell | Large prompt + 15 tools + memory dump injected every turn | 🔥🔥 High — context headroom is directly spent on the task. |
 | **Progressive disclosure** | Context/skills loaded on demand, never pre-injected | Full semantic + procedural memory injected into every system prompt | 🔥🔥 Medium-high — same headroom argument. |
 | **Eval-harness integration** | print/JSON + RPC modes; **Harbor adapter** (`badlogic/pi-terminal-bench`) | Interactive TUI only — cannot even be benchmarked as-is | 🔥 Medium — required to measure anything. |
@@ -236,7 +239,7 @@ The roadmap is split into two tracks, because "missing" means two different thin
 
 ### 6.1 Track A — benchmark drivers
 
-1. **Provider-agnostic client** 🔥🔥🔥 — the `LLMClient` interface already abstracts this; add a client factory + BYOK env config (Anthropic, OpenAI, …). Unlocks frontier models — the single highest-leverage change in this entire document.
+1. ~~**Provider-agnostic client**~~ ✅ **Done** — provider-neutral LLM layer with 25+ providers, BYOK env config, per-provider adapters, normalized streaming/errors/usage ([docs/providers.md](docs/providers.md)).
 2. **Slim the system prompt & tool surface** 🔥🔥 — measure current prompt size; trim the 15-tool list toward essentials; remove mid-session injections.
 3. **Progressive memory disclosure** 🔥🔥 — stop injecting the full semantic/procedural dump every turn; inject a compact summary or only the slices relevant to the current query (episodic retrieval is already query-relative).
 4. **Non-interactive mode + eval adapter** 🔥 — a print/JSON execution mode so NightCode can run under terminal-bench/Harbor and be measured at all.
@@ -244,21 +247,22 @@ The roadmap is split into two tracks, because "missing" means two different thin
 
 ### 6.2 Track B — feature parity & UX
 
-1. **Move hardcoded API keys to env** (do this soon regardless) — Groq/Jina keys are baked into source; `.env` is loaded but not authoritative.
+1. ~~**Move hardcoded API keys to env**~~ ✅ **Done** — no keys in source; `.env` + `nightcode.config.json` are authoritative.
 2. **Session persistence** — history/sessions are in-memory; survive restarts with JSONL or SQLite.
-3. **Streaming output** — render the LLM response incrementally instead of per-turn.
+3. **Streaming output** — the provider layer already normalizes streams (`text_delta`, `reasoning_delta`, `tool_call_*`); render them incrementally in the UI instead of per-turn.
 4. **Extension/skill system** — let users add tools/commands without forking (the `commands/` templates are a first step toward Pi-style skills).
 5. **Sensitive-file validation layer** (from `things-left.md`) — block tools from modifying files containing personal/sensitive data.
 6. **More tools** (from `things-left.md`) — e.g. git integration beyond raw `bash`.
 7. **Review context compaction** (from `things-left.md`) — re-read `context.ts` summarization; consider Pi-style checkpoint summaries.
 8. **A real test framework** — the assert-based `*.check.*` scripts work but don't scale; migrate when the suite grows.
-9. **Longer term** — local models (Ollama), MCP integration, vision/image input, agent-evaluation loop.
+9. **Longer term** — Ollama/vLLM/llama.cpp/LM Studio already work as providers (see docs/providers.md); next: MCP integration, vision/image input, agent-evaluation loop.
 
 ### Known limitations
-- Single model/provider; no fallback — this is Track A #1.
+- No provider failover mid-session — the active provider is fixed at boot; switch via `Ctrl+M` or config.
 - No sandboxing beyond the destructive-command regex + confirmation dialog (same stance as Pi's default).
-- Memory extraction depends on Groq + Jina network calls; if they fail, extraction silently degrades (logged, never fatal).
+- Memory extraction depends on the active provider + Jina network calls; if they fail, extraction silently degrades (logged, never fatal).
 - Episodic recall is similarity-based over a JSONL file — no dedup or forgetting policy yet.
+- Full incremental streaming rendering and session persistence are still on the roadmap.
 
 ---
 
@@ -270,6 +274,7 @@ The roadmap is split into two tracks, because "missing" means two different thin
 | [`docs/agent-event-flow.md`](docs/agent-event-flow.md) | AgentEvent pipeline: types → loop → UI rendering |
 | [`docs/error-recovery.md`](docs/error-recovery.md) | Tool failure signaling (`{ ok: false }`) and concise error summaries |
 | [`docs/cancel-latency-postmortem.md`](docs/cancel-latency-postmortem.md) | Cancellation latency fix and watchdog design |
+| [`docs/providers.md`](docs/providers.md) | Provider-neutral LLM layer — providers, auth, custom/local models, troubleshooting |
 
 **Conventions:** checks live next to the code they test (`*.check.ts` / `*.check.tsx`, run directly) · runtime data always goes to the repo root via `src/paths.ts` · `ui/` may import `agent/` types, never the reverse · no `utils/`/`helpers/` dumping grounds — group by responsibility.
 

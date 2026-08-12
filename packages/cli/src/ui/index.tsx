@@ -9,6 +9,7 @@ import type { AgentLoop } from "../agent/loop";
 import type { AgentEvent, ConfirmHook } from "../agent/types";
 import type { Command } from "./commands-menu/types";
 import type { AgentStatus } from "./status-bar";
+import type { ModelMenuData } from "./model-menu/types";
 import { logger } from "../logger";
 import { MarkdownContent, type MdPalette } from "./markdown";
 // Display-only — agent context lives in backend MessageManager, not here
@@ -28,6 +29,12 @@ type Props = {
     commands: Command[];
     /** /clear — swap to a fresh backend session; returns the new session identity. */
     onResetSession: () => { sessionId: string; sessionNumber: number };
+    /** Active provider id — enables the ✓ marker in the model selector. */
+    providerId?: string;
+    /** Build the model-selector data; when present (with onSwitchModel), Ctrl+M opens the menu. */
+    getModelOptions?: () => ModelMenuData;
+    /** Called when the user picks a provider/model — swaps the backend router. */
+    onSwitchModel?: (providerId: string, modelId: string) => { providerId: string; modelId: string };
 };
 
 // ── Color palette (Catppuccin Mocha inspired) ─────────────────────────────────
@@ -251,11 +258,15 @@ export function MessageBubble({ msg }: { msg: DisplayMessage }) {
 // The working directory NightCode was launched from — constant for the session.
 const CWD = process.cwd();
 
-export function App({ sessionId: initialSessionId, sessionNumber: initialSessionNumber, agentLoop, commands, model, onResetSession }: Props) {
+export function App({ sessionId: initialSessionId, sessionNumber: initialSessionNumber, agentLoop, commands, model: initialModel, onResetSession, providerId: initialProviderId, getModelOptions, onSwitchModel }: Props) {
     // The current session is owned here so /clear can swap it without re-mounting
     // the whole app (the backend swap happens in main via onResetSession).
     const [sessionId, setSessionId] = useState(initialSessionId);
     const [sessionNumber, setSessionNumber] = useState(initialSessionNumber);
+    // The active model/provider — updated when the user switches via Ctrl+M so
+    // the status bar and the ✓ marker track the backend router's state.
+    const [model, setModel] = useState(initialModel);
+    const [providerId, setProviderId] = useState(initialProviderId ?? "");
     // One-shot transition notice shown in the empty state after /clear.
     const [notice, setNotice] = useState<string | null>(null);
     const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -409,6 +420,19 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             keyEvent.stopPropagation();
         }
     });
+
+    // ── Model switching (Ctrl+M) ────────────────────────────────────────
+    const handleModelSelect = useCallback(
+        (nextProviderId: string, modelId: string) => {
+            if (!onSwitchModel) return;
+            const next = onSwitchModel(nextProviderId, modelId);
+            if (next) {
+                setModel(next.modelId);
+                setProviderId(next.providerId);
+            }
+        },
+        [onSwitchModel]
+    );
 
     // ── Build the confirm hook for the agent loop ─────────────────────
     const buildConfirmHook = useCallback((): ConfirmHook => {
@@ -599,6 +623,15 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
                     cwd={CWD}
                     status={status}
                     sessionNumber={sessionNumber}
+                    modelMenu={
+                        getModelOptions && onSwitchModel
+                            ? {
+                                  getData: getModelOptions,
+                                  providerId,
+                                  onSelect: handleModelSelect,
+                              }
+                            : undefined
+                    }
                 />
             </box>
         </box>

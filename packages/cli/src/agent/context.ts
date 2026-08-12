@@ -1,8 +1,8 @@
-import Groq from "groq-sdk";
 import { MessageManager } from "./messages";
 import { SessionManager } from "./session";
 import { ToolRegistry } from "./registry";
 import type { ContextType, MessageType } from "./types";
+import type { ChatLLM } from "../llm-client/types";
 import { logger } from "../logger";
 
 const systemPrompt = `You are NightCode, a terminal-based AI coding agent that helps users understand, modify, and manage code and files on their local machine.
@@ -191,10 +191,11 @@ If a requested operation is dangerous or irreversible, wait for explicit user co
 Always prioritize preserving user data.`;
 
 // ── Context window management ───────────────────────────────────────────
-// Qwen 3.6 27B on Groq has a 131,072 token context window. We reserve
-// ~30K for the system prompt, tool definitions, and output tokens, so the
-// safe threshold for message history alone is ~100,000 tokens.
-const CONTEXT_THRESHOLD_TOKENS = 100_000;
+// The compression threshold is derived from the ACTIVE model's context window
+// (reserve ~25% for system prompt, tool definitions, and output), so a 1M
+// window compresses later than the old fixed 100k did for a 131k model.
+const CONTEXT_RESERVE_RATIO    = 0.75;
+const CONTEXT_THRESHOLD_MIN    = 32_000;
 const PRESERVE_LAST_N          = 15;
 
 // Rough token estimation: ~3 chars per token is a conservative estimate that
@@ -204,9 +205,8 @@ const PRESERVE_LAST_N          = 15;
 const CHARS_PER_TOKEN = 3;
 const FLAT_OVERHEAD_PER_MSG = 10; // per-message framing overhead, same for all roles — precision beyond this is false confidence given the estimate is already approximate
 
-// Model used for the (cheap) summarization call. Keep this small/fast —
-// summarization is a compression task, not a reasoning task.
-const SUMMARIZER_MODEL = "llama-3.1-8b-instant";
+// Summarization uses the ACTIVE provider's cheap summarizer model (per-provider
+// presets pick a small/fast one; defaults to the main model when unset).
 const SUMMARY_MAX_WORDS = 400;
 
 function estimateTokens(text: string): number {
@@ -230,7 +230,7 @@ function estimateMessagesTokens(messages: MessageType[]): number {
 // rather than naive truncation. This is the actual "compression" step —
 // it preserves meaning (what was asked, what was done, what was decided)
 // instead of just chopping strings.
-async function summarizeMessages(messages: MessageType[], groqClient: Groq): Promise<string> {
+async function summarizeMessages(messages: MessageType[], llm: ChatLLM, model: string): Promise<string> {
     const rawTrace = messages
         .map((m) => {
             if (m.role === "tool") return `[tool result] ${(m.content ?? "").slice(0, 300)}`;
@@ -240,21 +240,26 @@ async function summarizeMessages(messages: MessageType[], groqClient: Groq): Pro
         .join("\n");
 
     try {
-        const completion = await groqClient.chat.completions.create({
-            model: SUMMARIZER_MODEL,
-            temperature: 0,
+        const response = await llm.chat({
+            sessionId: messages[0]?.sessionId ?? "summary",
+            model,
+            systemPrompt: "",
             messages: [
                 {
+                    messageId: "summarize",
+                    sessionId: messages[0]?.sessionId ?? "summary",
                     role: "user",
                     content:
                         `Summarize the following agent conversation history in under ${SUMMARY_MAX_WORDS} words. ` +
                         `Preserve concrete facts, file paths touched, decisions made, and outcomes (what succeeded/failed). ` +
                         `Do not add commentary or preamble — output only the summary itself.\n\n${rawTrace}`,
+                    createdAt: new Date(),
                 },
             ],
+            tools: [],
         });
 
-        const summary = completion.choices[0]?.message?.content?.trim();
+        const summary = response.type === "text" ? response.content.trim() : "";
         if (!summary) throw new Error("Empty summary returned");
         return summary;
     } catch (err) {
@@ -269,15 +274,17 @@ async function summarizeMessages(messages: MessageType[], groqClient: Groq): Pro
 
 async function manageContextWindow(
     messages: MessageType[],
-    groqClient: Groq,
+    llm: ChatLLM,
+    contextLimitTokens: number,
     existingSummary?: string
 ): Promise<{ messages: MessageType[]; summary?: string }> {
     if (messages.length === 0) return { messages, summary: existingSummary };
 
+    const threshold = Math.max(CONTEXT_THRESHOLD_MIN, Math.floor(contextLimitTokens * CONTEXT_RESERVE_RATIO));
     const estimated = estimateMessagesTokens(messages);
-    logger.debug(`[Context] Estimated ${messages.length} messages @ ~${estimated} tokens`);
+    logger.debug(`[Context] Estimated ${messages.length} messages @ ~${estimated} tokens (threshold ${threshold})`);
 
-    if (estimated <= CONTEXT_THRESHOLD_TOKENS) {
+    if (estimated <= threshold) {
         return { messages, summary: existingSummary }; // fits — no compression needed
     }
 
@@ -286,11 +293,11 @@ async function manageContextWindow(
     let recentMessages    = messages.slice(messages.length - preserveCount);
 
     logger.info(
-        `[Context] Exceeded threshold (${estimated} > ${CONTEXT_THRESHOLD_TOKENS}). ` +
+        `[Context] Exceeded threshold (${estimated} > ${threshold}). ` +
         `Summarizing ${olderMessages.length} old messages, preserving ${recentMessages.length} recent messages.`
     );
 
-    const newSummaryText = await summarizeMessages(olderMessages, groqClient);
+    const newSummaryText = await summarizeMessages(olderMessages, llm, llm.summarizerModel());
 
     // Chain with any prior summary so context isn't lost across repeated compressions
     const combinedSummary = existingSummary
@@ -309,7 +316,7 @@ async function manageContextWindow(
     // n <= PRESERVE_LAST_N (15), so this is cheap even though it's O(n) per iteration.
     while (recentMessages.length > 2) {
         const testMessages = [summaryMsg, ...recentMessages];
-        if (estimateMessagesTokens(testMessages) <= CONTEXT_THRESHOLD_TOKENS) break;
+        if (estimateMessagesTokens(testMessages) <= threshold) break;
         recentMessages = recentMessages.slice(1);
     }
 
@@ -334,7 +341,8 @@ export class ContextBuilder {
         private messageManager: MessageManager,
         private sessionManager: SessionManager,
         private toolRegistry: ToolRegistry,
-        private groqClient: Groq
+        /** The provider router — used only for context summarization. */
+        private chatLLM: ChatLLM
     ) {
         logger.debug("ContextBuilder constructed");
     }
@@ -354,7 +362,8 @@ export class ContextBuilder {
 
         // ── Apply context window management (with session-level summary reuse) ──
         const existing = this.sessionSummaries.get(sessionId);
-        const { messages, summary } = await manageContextWindow(rawMessages, this.groqClient, existing?.summary);
+        const contextLimit = this.chatLLM.contextLimit(session.model);
+        const { messages, summary } = await manageContextWindow(rawMessages, this.chatLLM, contextLimit, existing?.summary);
 
         if (summary && summary !== existing?.summary) {
             const lastMessageId = rawMessages[rawMessages.length - 1]?.messageId ?? "";
@@ -377,12 +386,12 @@ export class ContextBuilder {
             }
         }
 
-        // Map internal Tool → Groq's ChatCompletionTool shape.
+        // Map internal Tool → the neutral wire shape (adapters convert further).
         // Tool restrictions are enforced here: restricted tools are not merely
         // "discouraged" in the prompt, they are excluded from the tool list the
         // model actually receives.
         const toolList = this.toolRegistry.listFiltered(allowedTools);
-        const tools: Groq.Chat.Completions.ChatCompletionTool[] = toolList
+        const tools: ContextType["tools"] = toolList
             .map((tool) => ({
                 type: "function" as const,
                 function: {

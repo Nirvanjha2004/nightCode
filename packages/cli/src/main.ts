@@ -5,14 +5,13 @@ import { ContextBuilder } from "./agent/context";
 import { CommandRegistry } from "./agent/commands";
 import { AgentHarness } from "./agent/agent-harness";
 import { AgentLoop } from "./agent/loop";
-import { GroqClient } from "./llm-client/groq-client";
 import { TerminalUI } from "./ui/terminal";
 import type { Command } from "./ui/commands-menu/types";
 import { logger } from "./logger";
 import { join } from "node:path";
 import { PROJECT_ROOT } from "./paths";
 
-//// Tools — all 14, not just 3
+//// Tools — all 15
 import {
     read,
     write,
@@ -33,17 +32,40 @@ import {
 import { EpisodicMemoryManager } from "./agent/memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./agent/memory/SemanticMemoryManager";
 import { ProceduralMemoryManager } from "./agent/memory/ProceduralMemoryManager";
-import Groq from "groq-sdk";
+import { loadConfig, buildProviderSystem } from "./llm-client";
+import type { ModelMenuData } from "./ui/model-menu/types";
+
+/** Friendly startup error listing how to configure credentials. */
+function bootError(providerId: string, hint: string): string {
+    return [
+        `NightCode could not start: provider "${providerId}" has no API key configured.`,
+        ``,
+        `Fix one of:`,
+        `  1. ${hint}`,
+        `  2. Choose a different provider in nightcode.config.json or via NIGHTCODE_PROVIDER:`,
+        `       { "provider": "openai", "model": "gpt-4o" }`,
+        `  3. Local models need no key — try NIGHTCODE_PROVIDER=ollama (http://localhost:11434).`,
+        `  4. Set one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, DEEPSEEK_API_KEY,`,
+        `     MISTRAL_API_KEY, XAI_API_KEY, ... in .env at the project root.`,
+        ``,
+        `See docs/providers.md for the full list of supported providers.`,
+    ].join("\n");
+}
 
 async function main() {
     logger.info("=== NightCode Starting ===");
 
-    // Guard env var before anything boots (Bun auto-loads .env from project root)
-    const apiKey = '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';
-    if (!apiKey) {
-        logger.error("GROQ_API_KEY is not set — add it to .env at the project root");
-        throw new Error("GROQ_API_KEY is not set in environment / .env");
+    // 0. Provider system — config file + env → registry + active-provider router.
+    const config = loadConfig();
+    const system = buildProviderSystem(config);
+    const { registry, router, status } = system;
+
+    const activeStatus = status[router.providerId];
+    if (!activeStatus?.ok) {
+        logger.error(`Provider "${router.providerId}" is not authenticated (${activeStatus?.hint ?? "unknown reason"})`);
+        throw new Error(bootError(router.providerId, activeStatus?.hint ?? "set the provider's API key"));
     }
+    logger.info(`Active provider: ${router.providerId} (${router.activeProvider.displayName})`);
 
     // 1. Managers — no dependencies, boot first
     logger.debug("Initializing managers...");
@@ -76,23 +98,18 @@ async function main() {
     const registeredNames = toolRegistry.list().map((t) => t.name);
     logger.info(`Built-in tools registered (${registeredNames.length}): ${registeredNames.join(", ")}`);
 
-    // 3. ContextBuilder — depends on all three managers
+    // 3. ContextBuilder — the router powers context summarization
     logger.debug("Building ContextBuilder...");
     const contextBuilder = new ContextBuilder(
         messageManager,
         sessionManager,
         toolRegistry,
-        new Groq({
-            apiKey,
-        })
+        router
     );
     logger.info("ContextBuilder created");
 
     // Command registry — created and loaded ONCE at startup (not per message).
-    // Slash commands resolve to prompt templates + optional tool scope.
     const commandRegistry = new CommandRegistry();
-    // Bundled slash commands always come from the repo root, regardless of
-    // which directory the CLI was launched from.
     await commandRegistry.loadFromDir(join(PROJECT_ROOT, "commands"));
     logger.info(`Command registry loaded — ${commandRegistry.list().length} command(s)`);
 
@@ -106,15 +123,15 @@ async function main() {
         episodicMemory,
         semanticMemory,
         proceduralMemory,
-        commandRegistry
+        commandRegistry,
+        router
     );
     logger.info("AgentHarness created");
 
-    // 5. LLM client
-    logger.info("Initializing Groq LLM client...");
-    const llm = new GroqClient(apiKey);
+    // 5. LLM — the provider router (the loop stays provider-agnostic)
+    const llm = router;
 
-    // 6. Agent loop — depends on harness + llm
+    // 6. Agent loop
     logger.debug("Creating AgentLoop...");
     const agentLoop = new AgentLoop(harness, llm, 10);
     logger.info("AgentLoop created (maxIterations=10)");
@@ -124,29 +141,68 @@ async function main() {
     harness.agentLoop = agentLoop;
 
     // 7. Create a session before UI starts — the model is also shown in the status bar
-    const sessionModel = "qwen/qwen3.6-27b";
+    let currentProviderId = router.providerId;
+    let currentModel = config.model;
+    {
+        const known = router.listModels().some((m) => m.id === config.model);
+        if (!known) {
+            const fallback = router.listModels()[0];
+            if (fallback) {
+                logger.warn(
+                    `[Model] "${config.model}" is not in the "${currentProviderId}" catalog — using "${fallback.id}" (add it via nightcode.config.json to keep it)`
+                );
+                currentModel = fallback.id;
+            }
+            // no fallback → keep the configured model id; adapters tolerate unknown ids
+        }
+    }
     let sessionId = sessionManager.create({
-        model: sessionModel,
+        model: currentModel,
+        provider: currentProviderId,
     });
     let sessionNumber = 1;
-    logger.info(`Session created: ${sessionId} (#${sessionNumber})`);
+    logger.info(`Session created: ${sessionId} (#${sessionNumber}) — ${currentProviderId}/${currentModel}`);
 
-    // /clear — start a FRESH conversation. Only session state is touched: the
-    // old session's message history and its session record are dropped, and a
-    // brand-new session is created (fresh message history + fresh context
-    // summary). Files, Git state, and memory files are never touched.
+    // /clear — start a FRESH conversation. Only session state is touched.
     const resetSession = (): { sessionId: string; sessionNumber: number } => {
         messageManager.delete(sessionId);
         sessionManager.delete(sessionId);
-        sessionId = sessionManager.create({ model: sessionModel });
+        sessionId = sessionManager.create({
+            model: currentModel,
+            provider: currentProviderId,
+        });
         sessionNumber += 1;
         logger.info(`[Session] Reset — started fresh session: ${sessionId} (#${sessionNumber})`);
         return { sessionId, sessionNumber };
     };
 
-    // 8. Hand off to UI — the command menu suggests the loaded slash commands
-    //    (name + description) as the user types, plus the built-in UI command
-    //    /clear (intercepted by the frontend; it never reaches the agent loop).
+    // 7.5. Model switching — updates the router (active provider), the session
+    //      record, and the UI label. The next turn uses the new provider/model.
+    const switchModel = (providerId: string, modelId: string): { providerId: string; modelId: string } => {
+        router.setActiveProvider(providerId);
+        currentProviderId = providerId;
+        currentModel = modelId;
+        sessionManager.update(sessionId, { model: modelId, provider: providerId });
+        logger.info(`[Model] Switched to ${providerId}/${modelId}`);
+        return { providerId, modelId };
+    };
+
+    const getModelOptions = (): ModelMenuData => ({
+        providers: registry.list().map((p) => ({
+            id: p.providerId,
+            displayName: p.displayName,
+            authOk: status[p.providerId]?.ok ?? false,
+            models: p.listModels().map((m) => ({
+                id: m.id,
+                name: m.name,
+                contextWindow: m.contextWindow,
+                reasoning: m.reasoning,
+                vision: m.vision,
+            })),
+        })),
+    });
+
+    // 8. Hand off to UI
     logger.info("Starting Terminal UI...");
     const slashCommands: Command[] = [
         {
@@ -160,7 +216,19 @@ async function main() {
             value: `/${command.name}`,
         })),
     ];
-    const ui = new TerminalUI(sessionId, agentLoop, slashCommands, sessionModel, sessionNumber, resetSession);
+    const ui = new TerminalUI(
+        sessionId,
+        agentLoop,
+        slashCommands,
+        {
+            model: currentModel,
+            providerId: currentProviderId,
+            getModelOptions,
+            onSwitchModel: switchModel,
+        },
+        sessionNumber,
+        resetSession
+    );
     await ui.start();
 }
 

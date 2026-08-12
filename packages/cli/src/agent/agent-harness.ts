@@ -5,6 +5,7 @@ import type { MessageManager } from "./messages";
 import type { ToolRegistry } from "./registry";
 import type { SessionManager } from "./session";
 import type { Tool } from "./types";
+import type { ChatLLM } from "../llm-client/types";
 import { logger } from "../logger";
 import type { EpisodicMemoryManager } from "./memory/EpisodicMemoryManager";
 import type { SemanticMemoryManager } from "./memory/SemanticMemoryManager";
@@ -31,8 +32,15 @@ export class AgentHarness {
         public semanticMemoryManager: SemanticMemoryManager,
         public proceduralMemoryManager: ProceduralMemoryManager,
         public commandRegistry: CommandRegistry,
+        /** Provider router — used for background memory extraction. */
+        public llm?: ChatLLM,
     ) {
         logger.debug("AgentHarness constructed");
+    }
+
+    /** Cheap model used for subagent sessions (from the active provider preset). */
+    get subagentModel(): string {
+        return this.llm?.subagentModel() ?? "llama-3.1-8b-instant";
     }
 
     registerTool(tool: Tool): void {
@@ -162,7 +170,10 @@ export class AgentHarness {
                         "memory.classify",
                         async (childSpan) => {
                             try {
-                                return await extractMemories(executionTrace);
+                                if (!this.llm) {
+                                    throw new Error("No LLM provider wired — memory extraction disabled");
+                                }
+                                return await extractMemories(executionTrace, this.llm, this.llm.summarizerModel());
                             } catch (err) {
                                 markSpanError(childSpan, err);
                                 throw err;

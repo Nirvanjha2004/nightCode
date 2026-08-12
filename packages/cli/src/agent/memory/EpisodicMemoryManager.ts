@@ -17,9 +17,10 @@ export class EpisodicMemoryManager {
     this.episodicFile = episodicFile;
     this.jinaModel = jinaModel;
 
-    const key = 'jina_8ad270a2482c499ba6484c0ce28d37d2xbEYWQIIXXYyp2bh3uxKC1i81-pG';
-    if (!key) throw new Error("JINA_API_KEY not set in environment");
-    this.jinaApiKey = key;
+    // Key is optional at boot: without it the memory system degrades
+    // gracefully (embedding calls fail with a clear message, never crash
+    // the app). Add JINA_API_KEY to .env to enable episodic recall.
+    this.jinaApiKey = process.env.JINA_API_KEY?.trim() ?? "";
 
     // ensure directory exists before any write
     const dir = path.dirname(this.episodicFile);
@@ -30,6 +31,9 @@ export class EpisodicMemoryManager {
 
   // --- embedding ---
   private async getEmbedding(text: string): Promise<number[]> {
+    if (!this.jinaApiKey) {
+      throw new Error("JINA_API_KEY is not set in the environment — episodic memory embeddings are disabled.");
+    }
     const res = await fetch("https://api.jina.ai/v1/embeddings", {
       method: "POST",
       headers: {

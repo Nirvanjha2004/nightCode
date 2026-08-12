@@ -1069,7 +1069,7 @@ export const spawnSubagent: Tool = {
 
         // Fresh, isolated session — its message history is completely separate
         // from the parent's. Cheap, fast model: a focused sub-task, not a chat.
-        const subSessionId = harness.sessionManager.create({ model: "llama-3.1-8b-instant" });
+        const subSessionId = harness.sessionManager.create({ model: harness.subagentModel });
 
         // Snapshot current memory ONCE (semantic facts + procedural rules) and
         // hand it over as static context — no episodic retrieval, no writes back.
