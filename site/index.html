@@ -1,0 +1,1147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NightCode — a coding agent that lives in your terminal</title>
+<meta name="description" content="NightCode is a terminal-native ReAct coding agent: 25+ LLM providers, real tool use, automatic long-term memory, and a confirmation gate before anything destructive runs.">
+<meta name="theme-color" content="#F7F7FA">
+<meta name="color-scheme" content="light">
+<meta property="og:title" content="NightCode">
+<meta property="og:description" content="A coding agent that lives in your terminal. 25+ providers, real tool use, automatic memory, destructive-action confirmation.">
+<meta property="og:type" content="website">
+<style>
+/* ═════════════════════════════════════════════════════════════════════════
+   Light glass.
+   A soft color mesh sits at the very back; every surface above it is frosted
+   rather than filled, so the page has depth without any surface competing
+   with the one dark object on it — the terminal. That terminal keeps the
+   program's real palette (packages/cli/src/ui/theme.ts, --t-* below), which
+   is why it reads as a device resting on the page instead of a picture of one.
+   ═════════════════════════════════════════════════════════════════════════ */
+:root {
+  color-scheme: light;
+
+  /* page */
+  --bg:        #F6F6F9;
+  --ink:       #131318;   /* headings                */
+  --body:      #3F3F4A;   /* paragraphs              */
+  --muted:     #6B6B7A;   /* secondary               */
+  --faint:     #9B9BAA;   /* tertiary, labels        */
+
+  /* glass */
+  --glass:     rgba(255,255,255,.58);
+  --glass-2:   rgba(255,255,255,.74);
+  --glass-3:   rgba(255,255,255,.86);
+  --edge:      rgba(255,255,255,.9);      /* inner top highlight */
+  --border:    rgba(19,19,24,.09);
+  --border-2:  rgba(19,19,24,.14);
+
+  /* accents — the ember carried over from the program */
+  --accent:    #DC4E0D;   /* text-safe on light  */
+  --accent-lt: #FF7A2F;   /* fills and decoration */
+  --rose:      #F0436A;
+  --gold:      #E8940F;
+  --jade:      #0E9F6E;
+  --sky:       #2B7FE0;
+  --fire: linear-gradient(100deg, var(--rose) 0%, var(--accent-lt) 52%, #FFB43C 100%);
+
+  /* shadows — layered and soft, never a single hard drop */
+  --sh-1: 0 1px 2px rgba(19,19,24,.04), 0 4px 12px -4px rgba(19,19,24,.06);
+  --sh-2: 0 2px 4px rgba(19,19,24,.05), 0 14px 34px -12px rgba(19,19,24,.14);
+  --sh-3: 0 4px 8px rgba(19,19,24,.05), 0 30px 70px -20px rgba(19,19,24,.26);
+
+  /* the terminal — the program's own tokens, verbatim */
+  --t-bg:     #09080F;
+  --t-panel:  #0F0D18;
+  --t-alt:    #16121F;
+  --t-line:   #241F33;
+  --t-faint:  #4A4266;
+  --t-muted:  #948BB0;
+  --t-text:   #E2DCF2;
+  --t-ember:  #FF7A2F;
+  --t-gold:   #FFCE7A;
+  --t-amber:  #FF9F45;
+  --t-jade:   #3DDC97;
+  --t-code:   #FFB870;
+
+  --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --maxw: 1080px;
+  --ease: cubic-bezier(.22,.61,.36,1);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--body);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.62;
+  letter-spacing: -.011em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* The mesh. Four wide, low-saturation pools drifting behind everything —
+   this is the only thing the frosted surfaces have to refract, so it has to
+   be soft enough never to read as "gradient background". */
+body::before {
+  content: "";
+  position: fixed; inset: -25vh -15vw; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(38vw 34vh at 16% 10%, rgba(255,138,72,.30),  transparent 64%),
+    radial-gradient(34vw 30vh at 82% 14%, rgba(255,105,150,.24), transparent 64%),
+    radial-gradient(40vw 36vh at 68% 52%, rgba(140,132,255,.22), transparent 66%),
+    radial-gradient(34vw 32vh at 12% 62%, rgba(78,214,180,.18),  transparent 66%);
+  filter: blur(30px);
+  animation: drift 26s var(--ease) infinite alternate;
+}
+@keyframes drift {
+  from { transform: translate3d(-1.2%, 0, 0) scale(1); }
+  to   { transform: translate3d(1.2%, 1.6%, 0) scale(1.07); }
+}
+
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3 { color: var(--ink); line-height: 1.1; margin: 0; }
+h1 { letter-spacing: -.038em; }
+h2 { font-size: clamp(30px, 4vw, 46px); font-weight: 600; letter-spacing: -.032em; }
+h3 { font-size: 17.5px; font-weight: 600; letter-spacing: -.018em; line-height: 1.35; }
+p { margin: 0; }
+code, kbd, pre { font-family: var(--mono); }
+section[id], div[id] { scroll-margin-top: 76px; }
+
+.kbd {
+  display: inline-block; font-size: 12px; line-height: 1.55; font-weight: 500;
+  padding: 1px 7px; border-radius: 6px; white-space: nowrap;
+  background: var(--glass-3); color: var(--ink);
+  border: 1px solid var(--border-2);
+  box-shadow: 0 1px 0 rgba(19,19,24,.06), inset 0 1px 0 #fff;
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────── */
+header.nav {
+  position: sticky; top: 0; z-index: 50;
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  background: rgba(246,246,249,.62);
+  border-bottom: 1px solid var(--border);
+}
+.nav-in { display: flex; align-items: center; gap: 24px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--ink); letter-spacing: -.02em; }
+.brand .mark { color: var(--accent-lt); }
+.nav-links { display: flex; gap: 24px; margin-left: auto; font-size: 14.5px; }
+.nav-links a { color: var(--muted); font-weight: 450; }
+.nav-links a:hover { color: var(--ink); text-decoration: none; }
+@media (max-width: 780px) { .nav-links a:not(.ghbtn) { display: none; } }
+
+.ghbtn {
+  padding: 6px 15px; border-radius: 999px; color: var(--ink) !important; font-weight: 500;
+  background: var(--glass-2); border: 1px solid var(--border);
+  box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  transition: transform .18s var(--ease), box-shadow .18s var(--ease);
+}
+.ghbtn:hover { text-decoration: none; transform: translateY(-1px); box-shadow: var(--sh-2), inset 0 1px 0 var(--edge); }
+
+/* ── Hero ────────────────────────────────────────────────────────────── */
+.hero { padding: 96px 0 60px; text-align: center; }
+
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 9px; margin-bottom: 28px;
+  font-size: 13px; font-weight: 500; letter-spacing: -.005em; color: var(--muted);
+  padding: 6px 15px; border-radius: 999px;
+  background: var(--glass-2); border: 1px solid var(--border);
+  box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
+  -webkit-backdrop-filter: blur(14px) saturate(180%); backdrop-filter: blur(14px) saturate(180%);
+}
+.eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--jade); box-shadow: 0 0 0 3px rgba(14,159,110,.16); animation: pulse 2.6s var(--ease) infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+.hero h1 { font-size: clamp(42px, 7.2vw, 82px); font-weight: 600; }
+.hero h1 .g { background: var(--fire); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero .sub {
+  max-width: 620px; margin: 24px auto 0;
+  font-size: clamp(17px, 2vw, 20px); line-height: 1.55; color: var(--muted); font-weight: 400;
+}
+
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 36px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 12px 26px; border-radius: 999px; font-size: 15.5px; font-weight: 500; letter-spacing: -.012em;
+  transition: transform .2s var(--ease), box-shadow .2s var(--ease);
+}
+.btn.primary { background: var(--fire); color: #fff; box-shadow: 0 2px 6px rgba(220,78,13,.24), 0 14px 30px -10px rgba(220,78,13,.55); }
+.btn.primary:hover { text-decoration: none; transform: translateY(-2px); box-shadow: 0 4px 10px rgba(220,78,13,.26), 0 20px 40px -10px rgba(220,78,13,.6); }
+.btn.ghost {
+  background: var(--glass-2); color: var(--ink); border: 1px solid var(--border);
+  box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+.btn.ghost:hover { text-decoration: none; transform: translateY(-2px); box-shadow: var(--sh-2), inset 0 1px 0 var(--edge); }
+
+.stats { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; margin-top: 52px; }
+.stat b { display: block; font-size: 27px; font-weight: 600; color: var(--ink); letter-spacing: -.03em; }
+.stat span { font-size: 13px; color: var(--faint); font-weight: 450; }
+
+/* ── Terminal — the one dark object on the page ──────────────────────── */
+.term-shell { margin: 62px 0 0; position: relative; }
+.term-shell::after {
+  content: ""; position: absolute; inset: 22px 22px -30px; z-index: -1;
+  background: radial-gradient(60% 60% at 50% 100%, rgba(255,122,47,.34), transparent 72%);
+  filter: blur(44px);
+}
+.term {
+  border-radius: 16px; overflow: hidden; text-align: left;
+  background: var(--t-bg);
+  border: 1px solid rgba(19,19,24,.10);
+  box-shadow: var(--sh-3), 0 0 0 1px rgba(255,255,255,.5);
+}
+/* macOS-style light window chrome over dark content */
+.term-bar {
+  display: flex; align-items: center; gap: 8px; padding: 11px 16px;
+  background: rgba(250,250,252,.82);
+  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid rgba(19,19,24,.10);
+}
+.term-bar i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+.term-bar .r { background: #FF5F57; } .term-bar .y { background: #FEBC2E; } .term-bar .g { background: #28C840; }
+.term-bar .title { margin-left: 10px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.term-bar .replay {
+  margin-left: auto; font-size: 11.5px; font-weight: 500; color: var(--muted);
+  background: var(--glass-3); border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 12px; cursor: pointer;
+  transition: color .18s, box-shadow .18s, transform .18s;
+}
+.term-bar .replay:hover { color: var(--ink); transform: translateY(-1px); box-shadow: var(--sh-1); }
+
+.term-body {
+  font-family: var(--mono); font-size: 13px; line-height: 1.62; letter-spacing: 0;
+  min-height: 440px; display: flex; flex-direction: column; color: var(--t-text);
+}
+@media (max-width: 620px) { .term-body { font-size: 11px; min-height: 380px; } }
+
+.t-head { display: flex; align-items: center; padding: 5px 12px; border-bottom: 1px solid var(--t-line); flex: 0 0 auto; }
+.t-head .v { margin-left: auto; color: var(--t-faint); font-size: 11.5px; }
+.t-scroll { flex: 1 1 auto; padding: 10px 12px; overflow: hidden; }
+
+/* one gutter column + content — the same spine the real transcript uses */
+.t-row { display: grid; grid-template-columns: 1ch 1fr; gap: 1ch; margin-bottom: .55em; }
+.t-row.nested { grid-template-columns: 1ch 1ch 1fr; }
+.t-row .mk { color: var(--t-faint); }
+.t-row .bd { min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.t-row.tight { margin-bottom: 0; }
+
+/* Mark colors need the extra class to out-specify `.t-row .mk` above —
+   the same c-* names are reused inside .bd, where no such default applies. */
+.t-row .mk.c-ok    { color: var(--t-jade);  text-shadow: 0 0 10px rgba(61,220,151,.5); }
+.t-row .mk.c-run   { color: var(--t-amber); text-shadow: 0 0 10px rgba(255,159,69,.55); }
+.t-row .mk.c-spark { color: var(--t-gold);  text-shadow: 0 0 10px rgba(255,206,122,.55); }
+.t-row .mk.c-mark  { color: var(--t-gold);  text-shadow: 0 0 12px rgba(255,206,122,.65); }
+.t-row .mk.c-note  { color: var(--t-faint); }
+
+.c-user  { color: var(--t-muted); }
+.c-note  { color: var(--t-faint); }
+.c-tool  { color: var(--t-text); }
+.c-args  { color: var(--t-muted); }
+.c-dur   { color: var(--t-faint); }
+.c-res   { color: var(--t-muted); opacity: .82; }
+.c-h     { color: #FDFBFF; font-weight: 700; }
+.c-em    { color: #FDFBFF; font-weight: 700; }
+.c-code  { color: var(--t-code); background: var(--t-alt); border-radius: 3px; padding: 0 3px; }
+.c-mark  { color: var(--t-gold); }
+.c-spark { color: var(--t-gold); }
+
+.t-think { border-left: 1px solid var(--t-line); padding-left: 1ch; color: var(--t-faint); }
+.t-fence { border-left: 1px solid var(--t-ember); background: var(--t-alt); padding: 0 1ch; }
+.t-lang  { color: var(--t-faint); }
+
+.t-caret { display: inline-block; width: .55em; height: 1.02em; background: var(--t-ember); box-shadow: 0 0 10px var(--t-ember); vertical-align: -.16em; animation: blink 1.05s steps(1) infinite; }
+@keyframes blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+
+.t-foot { flex: 0 0 auto; padding: 4px 12px 9px; }
+.t-box {
+  border: 1px solid var(--t-ember); border-radius: 9px; background: var(--t-panel);
+  padding: 2px 10px; display: flex; gap: 1ch;
+  box-shadow: 0 0 22px -10px var(--t-ember);
+  transition: border-color .35s var(--ease), box-shadow .35s var(--ease);
+}
+.t-box.busy { border-color: var(--t-line); box-shadow: none; }
+.t-box .cr { color: var(--t-ember); font-weight: 700; }
+.t-box.busy .cr { color: var(--t-faint); }
+.t-box .ph { color: var(--t-faint); }
+.t-status { display: flex; gap: 1ch; padding: 5px 2px 0; color: var(--t-faint); font-size: 12px; }
+.t-status .pip { color: var(--t-jade); }
+.t-status .lbl { color: var(--t-jade); font-weight: 700; }
+.t-status.run .pip, .t-status.run .lbl { color: var(--t-amber); }
+@media (max-width: 620px) { .t-status .hideable { display: none; } }
+
+/* ── Sections ────────────────────────────────────────────────────────── */
+section { padding: 96px 0; position: relative; z-index: 1; }
+.sec-head { max-width: 660px; margin: 0 auto 48px; text-align: center; }
+.sec-head .tag {
+  display: inline-block; margin-bottom: 14px;
+  font-size: 13px; font-weight: 600; letter-spacing: -.005em; color: var(--accent);
+}
+.sec-head p { color: var(--muted); margin-top: 16px; font-size: 17.5px; }
+
+.grid { display: grid; gap: 16px; }
+.g2 { grid-template-columns: repeat(2, 1fr); }
+.g3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 880px) { .g3 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .g2, .g3 { grid-template-columns: 1fr; } }
+
+/* the glass primitive — every raised surface on the page is one of these */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+}
+
+.card { padding: 26px; transition: transform .28s var(--ease), box-shadow .28s var(--ease), background .28s var(--ease); }
+.card:hover { transform: translateY(-4px); background: var(--glass-2); box-shadow: var(--sh-2), inset 0 1px 0 var(--edge); }
+.card .ico {
+  display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 16px;
+  font-family: var(--mono); font-size: 16px; color: #fff; border-radius: 11px;
+  background: var(--fire); box-shadow: 0 4px 12px -4px rgba(220,78,13,.6);
+}
+.card p { color: var(--muted); font-size: 15px; margin-top: 10px; }
+.card code { color: var(--accent); font-size: 13.5px; }
+
+/* ── Steps ───────────────────────────────────────────────────────────── */
+.steps { display: grid; gap: 20px; counter-reset: s; }
+.step { display: grid; grid-template-columns: 44px 1fr; gap: 20px; align-items: start; }
+.step .num {
+  counter-increment: s; position: relative;
+  width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 13px; font-weight: 600; color: var(--ink);
+  background: var(--glass-3); border: 1px solid var(--border);
+  box-shadow: var(--sh-1), inset 0 1px 0 #fff;
+}
+.step .num::before { content: counter(s); }
+.step .num::after {
+  content: ""; position: absolute; left: 50%; top: 38px; bottom: -30px; width: 1px;
+  background: linear-gradient(to bottom, var(--border-2), transparent);
+}
+.step:last-child .num::after { display: none; }
+.step h3 { margin-bottom: 7px; }
+.step > div > p { color: var(--muted); font-size: 15px; margin-bottom: 14px; }
+
+/* ── Code block ──────────────────────────────────────────────────────── */
+.code { position: relative; border-radius: 16px; overflow: hidden; }
+.code pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.72; color: var(--ink); letter-spacing: -.01em; }
+.code .cm { color: var(--faint); }
+.code .kw { color: var(--accent); }
+.code .st { color: var(--jade); }
+.code .fn { color: var(--sky); }
+.copy {
+  position: absolute; top: 10px; right: 10px;
+  font-size: 11.5px; font-weight: 500; color: var(--muted);
+  background: var(--glass-3); border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 11px; cursor: pointer; opacity: 0;
+  box-shadow: var(--sh-1);
+  transition: opacity .2s, color .2s, transform .2s;
+}
+.code:hover .copy { opacity: 1; }
+.copy:hover { color: var(--ink); transform: translateY(-1px); }
+.copy.done { color: var(--jade); opacity: 1; }
+
+/* ── Flow diagram ────────────────────────────────────────────────────── */
+.flow { padding: 32px 24px; overflow-x: auto; }
+.flow-track { display: flex; align-items: stretch; min-width: 740px; }
+.node { flex: 1; text-align: center; padding: 0 10px; position: relative; }
+.node .box {
+  border-radius: 12px; padding: 14px 8px;
+  font-family: var(--mono); font-size: 12.5px; color: var(--body);
+  background: var(--glass-2); border: 1px solid var(--border);
+  box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
+  transition: color .45s var(--ease), background .45s var(--ease), box-shadow .45s var(--ease), transform .45s var(--ease);
+}
+.node.on .box {
+  color: #fff; background: var(--fire); border-color: transparent; transform: translateY(-3px);
+  box-shadow: 0 4px 10px rgba(220,78,13,.22), 0 16px 34px -12px rgba(220,78,13,.7);
+}
+.node small { display: block; margin-top: 11px; font-size: 12.5px; color: var(--faint); line-height: 1.45; }
+.node::after { content: ""; position: absolute; top: 24px; right: -3px; width: 6px; height: 6px; border-top: 1.5px solid var(--border-2); border-right: 1.5px solid var(--border-2); transform: rotate(45deg); }
+.node:last-child::after { display: none; }
+.flow-loop { text-align: center; margin-top: 22px; font-size: 13.5px; color: var(--faint); }
+.flow-loop b { color: var(--accent); font-weight: 500; }
+
+/* ── Provider chips ──────────────────────────────────────────────────── */
+.chips { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; }
+.chip {
+  font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  border-radius: 999px; padding: 6px 14px;
+  background: var(--glass-2); border: 1px solid var(--border);
+  box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  transition: transform .2s var(--ease), box-shadow .2s var(--ease), color .2s;
+}
+.chip:hover { color: var(--ink); transform: translateY(-2px); box-shadow: var(--sh-2), inset 0 1px 0 var(--edge); }
+.chip.local { color: var(--sky); }
+.chip.dflt  { color: #fff; background: var(--fire); border-color: transparent; box-shadow: 0 3px 10px -3px rgba(220,78,13,.55); }
+
+/* ── Table ───────────────────────────────────────────────────────────── */
+.tbl-wrap { overflow: hidden; }
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+th, td { text-align: left; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+th { color: var(--faint); font-weight: 500; font-size: 12.5px; letter-spacing: .02em; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,.42); }
+td code { color: var(--accent); font-size: 13.5px; }
+td .d { color: var(--muted); }
+
+/* ── Keys ────────────────────────────────────────────────────────────── */
+.keyrow { display: flex; align-items: baseline; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.keyrow:last-child { border-bottom: none; }
+.keyrow .k { flex: 0 0 118px; }
+.keyrow .d { color: var(--muted); font-size: 15px; }
+.panel { padding: 26px 28px; }
+.panel > h3 { margin-bottom: 6px; }
+
+/* ── Note ────────────────────────────────────────────────────────────── */
+.note { padding: 20px 24px; border-left: 3px solid var(--accent-lt); border-radius: 6px 20px 20px 6px; }
+.note b { color: var(--ink); }
+.note p { color: var(--muted); font-size: 15px; margin-top: 6px; }
+.note code { color: var(--accent); font-size: 13.5px; }
+
+/* ── Footer ──────────────────────────────────────────────────────────── */
+footer { border-top: 1px solid var(--border); padding: 48px 0; color: var(--faint); font-size: 14.5px; position: relative; z-index: 1; }
+.foot-in { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+.foot-in .sp { margin-left: auto; }
+footer a { color: var(--muted); }
+
+/* ── Reveal ──────────────────────────────────────────────────────────── */
+.rv { opacity: 0; transform: translateY(18px); transition: opacity .8s var(--ease), transform .8s var(--ease); }
+.rv.in { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  .rv { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top"><span class="mark">◈</span> NightCode</a>
+    <nav class="nav-links">
+      <a href="#start">Quick start</a>
+      <a href="#how">How it works</a>
+      <a href="#usage">Usage</a>
+      <a href="#providers">Providers</a>
+      <a href="#config">Config</a>
+      <a class="ghbtn" href="https://github.com/Nirvanjha2004/nightCode" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<div id="top"></div>
+
+<!-- ══ HERO ══════════════════════════════════════════════════════════ -->
+<div class="wrap hero">
+  <span class="eyebrow"><span class="dot"></span> Bun · TypeScript · 25+ providers</span>
+  <h1>A coding agent that<br>lives in your <span class="g">terminal</span>.</h1>
+  <p class="sub">
+    NightCode reads your codebase with real tools, edits files, runs your tests, and
+    answers — streaming every step as it happens. It asks before it does anything
+    destructive, and it remembers what it learned last time.
+  </p>
+
+  <div class="cta">
+    <a class="btn primary" href="#start">Get started</a>
+    <a class="btn ghost" href="https://github.com/Nirvanjha2004/nightCode" target="_blank" rel="noopener">View source</a>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b>25+</b><span>providers</span></div>
+    <div class="stat"><b>15</b><span>built-in tools</span></div>
+    <div class="stat"><b>3</b><span>memory kinds</span></div>
+    <div class="stat"><b>14</b><span>self-checks</span></div>
+  </div>
+
+  <!-- ── live replay of a real session ── -->
+  <div class="term-shell">
+    <div class="term">
+      <div class="term-bar">
+        <i class="r"></i><i class="y"></i><i class="g"></i>
+        <span class="title">bun run dev:cli</span>
+        <button class="replay" id="replay" type="button">↻ replay</button>
+      </div>
+      <div class="term-body">
+        <div class="t-head">
+          <span><span style="color:var(--t-ember)">◈</span> <b style="color:var(--t-ember)">Night</b><b style="color:var(--t-gold)">Code</b></span>
+          <span class="v">v1.0.0</span>
+        </div>
+        <div class="t-scroll" id="screen"></div>
+        <div class="t-foot">
+          <div class="t-box" id="box">
+            <span class="cr">›</span>
+            <span id="composer"><span class="ph">Ask anything…</span></span>
+          </div>
+          <div class="t-status" id="status">
+            <span class="pip">●</span><span class="lbl">Ready</span>
+            <span>·</span><span>groq/qwen3.6-27b</span>
+            <span class="hideable">·</span><span class="hideable">~/nightCode</span>
+            <span class="hideable">·</span><span class="hideable">session 1</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ WHAT YOU GET ══════════════════════════════════════════════════ -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="tag">What you get</span>
+      <h2>A full ReAct agent,<br>not a chat box</h2>
+      <p>Every turn is context → model → tools → result, looped up to ten times until there is a real answer. You watch the whole thing happen.</p>
+    </div>
+
+    <div class="grid g3">
+      <div class="card glass rv">
+        <span class="ico">⏺</span>
+        <h3>Real tool use</h3>
+        <p>15 tools built in. The model sees a lean 9: <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>, <code>grep</code>, <code>find</code>, <code>ls</code>, <code>todoWrite</code>, <code>spawn_subagent</code> — a small surface keeps the context clean.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">⚠</span>
+        <h3>Asks before it breaks things</h3>
+        <p>Destructive tools — <code>write</code>, <code>delete</code>, <code>rename</code>, risky <code>bash</code> — pause on a confirmation dialog. Nothing runs until you press <span class="kbd">y</span>.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">✻</span>
+        <h3>Streams as it thinks</h3>
+        <p>Answers type out live as the model generates them, and reasoning streams into a dimmed panel beside the work — no staring at a spinner wondering if it hung.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">◈</span>
+        <h3>Remembers across sessions</h3>
+        <p>Durable facts, learned rules, and notable events are extracted after each turn and injected into the next session's prompt. Stored in your repo, never in a cloud.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">✗</span>
+        <h3>Stops when you say stop</h3>
+        <p><span class="kbd">Esc</span> ends a run between steps, keeps the history valid, and kills the child process tree. The session stays usable for the next prompt.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">⎇</span>
+        <h3>Delegates to subagents</h3>
+        <p><code>spawn_subagent</code> hands a scoped sub-task to a fresh session with restricted tools and no memory writes — so a side quest can't pollute the main thread.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ QUICK START ═══════════════════════════════════════════════════ -->
+<section id="start">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="tag">Quick start</span>
+      <h2>Running in three commands</h2>
+      <p>NightCode runs on <a href="https://bun.sh" target="_blank" rel="noopener">Bun</a>. Bring your own key for any provider you like — the default is Groq.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step rv">
+        <div class="num"></div>
+        <div>
+          <h3>Clone and install</h3>
+          <p>A Bun workspace — one install covers the whole monorepo.</p>
+          <div class="code glass">
+            <button class="copy" type="button">copy</button>
+<pre><span class="cm"># clone</span>
+git clone https://github.com/Nirvanjha2004/nightCode.git
+cd nightCode
+
+<span class="cm"># install (bun workspace)</span>
+bun install</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step rv">
+        <div class="num"></div>
+        <div>
+          <h3>Add a key</h3>
+          <p>Copy the template and fill in whichever provider you use. Bun auto-loads <code>.env</code> from the repo root — keys are never hardcoded.</p>
+          <div class="code glass">
+            <button class="copy" type="button">copy</button>
+<pre>cp .env.example .env
+
+<span class="cm"># then edit .env — one key is enough to boot</span>
+GROQ_API_KEY=<span class="st">gsk_…</span>
+
+<span class="cm"># optional: pick a different provider + model</span>
+NIGHTCODE_PROVIDER=<span class="st">anthropic</span>
+NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="step rv">
+        <div class="num"></div>
+        <div>
+          <h3>Run it</h3>
+          <p>That's the whole setup. The UI boots into a fresh session in your current directory.</p>
+          <div class="code glass">
+            <button class="copy" type="button">copy</button>
+<pre>bun run dev:cli</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note glass rv" style="margin-top: 34px;">
+      <b>No key at all?</b>
+      <p>Local models need none. <code>NIGHTCODE_PROVIDER=ollama NIGHTCODE_MODEL=llama3.3 bun run dev:cli</code> talks to <code>http://localhost:11434</code>. Same for llama.cpp, LM&nbsp;Studio and vLLM.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ HOW IT WORKS ══════════════════════════════════════════════════ -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="tag">How it works</span>
+      <h2>What happens when<br>you hit enter</h2>
+      <p>One turn, start to finish. Every stage emits an event, and every event is something you can see on screen.</p>
+    </div>
+
+    <div class="flow glass rv">
+      <div class="flow-track" id="flow">
+        <div class="node"><div class="box">input</div><small>slash command resolved, raw text stored</small></div>
+        <div class="node"><div class="box">memory</div><small>facts, rules and past events built into the prompt</small></div>
+        <div class="node"><div class="box">context</div><small>~700-token prompt + a 9-tool surface</small></div>
+        <div class="node"><div class="box">model</div><small>streamed — text and reasoning arrive as deltas</small></div>
+        <div class="node"><div class="box">tools</div><small>run, with a confirmation gate on destructive ones</small></div>
+        <div class="node"><div class="box">answer</div><small>final text stored, memory extracted in the background</small></div>
+      </div>
+      <div class="flow-loop">
+        <b>↻</b> steps 3–5 loop up to 10 times per turn, until the model stops calling tools
+      </div>
+    </div>
+
+    <div class="grid g3" style="margin-top: 20px;">
+      <div class="card glass rv">
+        <span class="ico">◷</span>
+        <h3>Context stays bounded</h3>
+        <p>Around 100k estimated tokens, older messages are summarized by the model itself — chainable across compressions, always keeping the last 15 messages intact.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">↯</span>
+        <h3>Failures come back as results</h3>
+        <p>A failing shell command returns its stdout, stderr and exit code as a <em>result</em>, not an exception — so the agent can read the error and recover on the next step.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">◎</span>
+        <h3>Memory is guarded</h3>
+        <p>The <code>memory/</code> tree is off-limits to every agent tool. Read, write, edit, delete and grep are all blocked against it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ USAGE ═════════════════════════════════════════════════════════ -->
+<section id="usage">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="tag">Usage</span>
+      <h2>Driving the thing</h2>
+      <p>Everything is one keystroke away. There is no mouse mode and no menus you have to hunt for.</p>
+    </div>
+
+    <div class="grid g2">
+      <div class="panel glass rv">
+        <h3 style="margin-bottom:12px;">Keys</h3>
+        <div class="keyrow"><span class="k"><span class="kbd">Enter</span></span><span class="d">Send the prompt</span></div>
+        <div class="keyrow"><span class="k"><span class="kbd">Shift</span> <span class="kbd">Enter</span></span><span class="d">Newline instead of sending</span></div>
+        <div class="keyrow"><span class="k"><span class="kbd">Esc</span></span><span class="d">Cancel the active run — the session survives</span></div>
+        <div class="keyrow"><span class="k"><span class="kbd">Ctrl</span> <span class="kbd">C</span></span><span class="d">Cancel; a second press within 2s exits</span></div>
+        <div class="keyrow"><span class="k"><span class="kbd">Ctrl</span> <span class="kbd">M</span></span><span class="d">Open the provider / model selector</span></div>
+        <div class="keyrow"><span class="k"><span class="kbd">y</span> <span class="kbd">n</span></span><span class="d">Approve or skip a destructive action</span></div>
+        <div class="keyrow"><span class="k"><span class="kbd">/</span></span><span class="d">Slash-command autocomplete</span></div>
+      </div>
+
+      <div class="panel glass rv">
+        <h3 style="margin-bottom:12px;">Slash commands</h3>
+        <div class="keyrow"><span class="k"><code style="color:var(--accent)">/clear</code></span><span class="d">Fresh session — history and summary reset; files and memory untouched</span></div>
+        <div class="keyrow"><span class="k"><code style="color:var(--accent)">/commit</code></span><span class="d">Stage everything and write a conventional commit message</span></div>
+        <div class="keyrow"><span class="k"><code style="color:var(--accent)">/review</code></span><span class="d">Read-only review of the uncommitted diff</span></div>
+        <div class="keyrow"><span class="k"><code style="color:var(--accent)">/explain</code></span><span class="d">Trace a file or function and explain it in plain language</span></div>
+        <div class="keyrow"><span class="k"><code style="color:var(--accent)">/fix-issue</code></span><span class="d">Locate a described bug, fix it minimally, verify with tests</span></div>
+        <p style="color:var(--muted); font-size:14.5px; margin-top:18px;">
+          Add your own: drop a markdown file in <code style="color:var(--accent)">commands/</code> with optional
+          <code style="color:var(--accent)">description</code> / <code style="color:var(--accent)">argument-hint</code> frontmatter.
+          <code style="color:var(--accent)">$ARGUMENTS</code> is replaced with whatever you typed after the command.
+        </p>
+      </div>
+    </div>
+
+    <div class="rv" style="margin-top:42px;">
+      <div class="sec-head" style="margin-bottom:24px;">
+        <h3 style="font-size:22px; letter-spacing:-.025em;">Files it creates</h3>
+        <p style="font-size:15.5px; margin-top:10px;">All gitignored, created on first run, and always anchored to the repo root — never to whatever directory you launched from.</p>
+      </div>
+      <div class="tbl-wrap glass">
+        <table>
+          <thead><tr><th>Path</th><th>Contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>memory/semantic.json</code></td><td class="d">Durable facts about you, the project and the environment</td></tr>
+            <tr><td><code>memory/procedural.md</code></td><td class="d">Learned rules — "always do X before Y"</td></tr>
+            <tr><td><code>memory/episodic/events.jsonl</code></td><td class="d">Notable past events with embeddings, retrieved by similarity</td></tr>
+            <tr><td><code>logs/combined.log</code></td><td class="d">Winston JSON, all levels, 5&nbsp;MB × 5 rotated</td></tr>
+            <tr><td><code>logs/error.log</code></td><td class="d">Warnings and above only</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ PROVIDERS ═════════════════════════════════════════════════════ -->
+<section id="providers">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="tag">Providers</span>
+      <h2>Bring your own model</h2>
+      <p>One internal interface, per-provider adapters. Hosted or local, frontier or cheap — switch at boot with an env var, or mid-session with <span class="kbd">Ctrl</span> <span class="kbd">M</span>.</p>
+    </div>
+
+    <div class="chips rv">
+      <span class="chip dflt">groq · default</span>
+      <span class="chip">openai</span><span class="chip">anthropic</span><span class="chip">google</span>
+      <span class="chip">deepseek</span><span class="chip">mistral</span><span class="chip">xai</span>
+      <span class="chip">cerebras</span><span class="chip">together</span><span class="chip">fireworks</span>
+      <span class="chip">openrouter</span><span class="chip">nvidia</span><span class="chip">huggingface</span>
+      <span class="chip">zai</span><span class="chip">minimax</span><span class="chip">kimi</span>
+      <span class="chip">opencode-zen</span><span class="chip">opencode-go</span>
+      <span class="chip">vercel-gateway</span><span class="chip">cloudflare-gateway</span><span class="chip">cloudflare-workers</span>
+      <span class="chip">azure</span><span class="chip">vertex</span><span class="chip">bedrock</span>
+      <span class="chip local">ollama · local</span><span class="chip local">llama-cpp · local</span>
+      <span class="chip local">lmstudio · local</span><span class="chip local">vllm · local</span>
+      <span class="chip">custom</span>
+    </div>
+
+    <div class="grid g3" style="margin-top:34px;">
+      <div class="card glass rv">
+        <span class="ico">◍</span>
+        <h3>One transport, many providers</h3>
+        <p>Every OpenAI-compatible provider shares a single transport configured with a base URL, key and catalog. Anthropic, Gemini, Azure, Vertex and Bedrock get dedicated adapters.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">⌁</span>
+        <h3>Normalized everything</h3>
+        <p>Streams, errors and usage are normalized before the loop sees them, so the agent never learns a provider's quirks.</p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico">✦</span>
+        <h3>New provider, no code</h3>
+        <p>Add a <code>providers</code> entry to <code>nightcode.config.json</code> and it registers at boot. Source changes are only needed for a genuinely new wire format.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ CONFIG ════════════════════════════════════════════════════════ -->
+<section id="config">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="tag">Configuration</span>
+      <h2>Two files, both optional</h2>
+      <p>Environment variables win over the config file, which wins over the built-in defaults.</p>
+    </div>
+
+    <div class="grid g2">
+      <div class="rv">
+        <h3 style="margin-bottom:12px;"><code style="color:var(--accent)">.env</code> — keys and selection</h3>
+        <div class="code glass">
+          <button class="copy" type="button">copy</button>
+<pre><span class="cm"># provider + model (optional)</span>
+NIGHTCODE_PROVIDER=groq
+NIGHTCODE_MODEL=qwen/qwen3.6-27b
+
+<span class="cm"># whichever keys you actually use</span>
+GROQ_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GOOGLE_API_KEY=
+DEEPSEEK_API_KEY=
+
+<span class="cm"># local endpoints need no key</span>
+OLLAMA_BASE_URL=http://localhost:11434/v1</pre>
+        </div>
+      </div>
+
+      <div class="rv">
+        <h3 style="margin-bottom:12px;"><code style="color:var(--accent)">nightcode.config.json</code> — the rest</h3>
+        <div class="code glass">
+          <button class="copy" type="button">copy</button>
+<pre>{
+  <span class="fn">"provider"</span>: <span class="st">"deepseek"</span>,
+  <span class="fn">"model"</span>: <span class="st">"deepseek-chat"</span>,
+  <span class="fn">"reasoning"</span>: <span class="st">"off"</span>,
+  <span class="fn">"providers"</span>: {
+    <span class="fn">"my-provider"</span>: {
+      <span class="fn">"api"</span>: <span class="st">"openai-compatible"</span>,
+      <span class="fn">"baseUrl"</span>: <span class="st">"https://api.example.com/v1"</span>,
+      <span class="fn">"apiKeyEnv"</span>: <span class="st">"MY_PROVIDER_KEY"</span>,
+      <span class="fn">"models"</span>: [
+        { <span class="fn">"id"</span>: <span class="st">"my-model"</span>, <span class="fn">"contextWindow"</span>: 131072 }
+      ]
+    }
+  }
+}</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="note glass rv" style="margin-top:30px;">
+      <b>Keep keys in <code>.env</code>, not in the config file.</b>
+      <p><code>reasoning</code> accepts <code>off</code> · <code>low</code> · <code>medium</code> · <code>high</code> · <code>max</code>, and is the one setting with no environment override. Full reference lives in <code>docs/providers.md</code>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ STATUS ════════════════════════════════════════════════════════ -->
+<section id="status">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="tag">Status</span>
+      <h2>What it doesn't do yet</h2>
+      <p>NightCode is a personal project, and the README keeps an honest scorecard against <a href="https://github.com/earendil-works/pi" target="_blank" rel="noopener">Pi</a>. The short version:</p>
+    </div>
+
+    <div class="grid g2">
+      <div class="card glass rv">
+        <span class="ico" style="background:linear-gradient(140deg,#12B886,#0E9F6E); box-shadow:0 4px 12px -4px rgba(14,159,110,.6)">✓</span>
+        <h3>Solid today</h3>
+        <p>
+          Provider-neutral LLM layer across 25+ providers · live streaming of answers and reasoning ·
+          automatic three-part memory · destructive-action confirmation · cancellation that actually
+          kills child processes · 14 assertion-based self-checks.
+        </p>
+      </div>
+      <div class="card glass rv">
+        <span class="ico" style="background:linear-gradient(140deg,#FFC048,#E8940F); box-shadow:0 4px 12px -4px rgba(232,148,15,.6)">◔</span>
+        <h3>Not there yet</h3>
+        <p>
+          Sessions live in memory and are lost on exit · no session tree or branching ·
+          no extension system — you fork the code · interactive TUI only, so there is no
+          print/JSON mode to benchmark against · memory is injected wholesale rather than on demand.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-in">
+    <span class="brand"><span class="mark">◈</span> NightCode</span>
+    <span>Built with Bun. Terminal UI by <a href="https://github.com/anomalyco/opentui" target="_blank" rel="noopener">@opentui</a>.</span>
+    <span class="sp"></span>
+    <a href="https://github.com/Nirvanjha2004/nightCode" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ── reveal on scroll ─────────────────────────────────────────────── */
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+    }
+  }, { rootMargin: "0px 0px -8% 0px", threshold: .12 });
+  document.querySelectorAll(".rv").forEach((el, i) => {
+    el.style.transitionDelay = (Math.min(i % 6, 5) * 60) + "ms";
+    io.observe(el);
+  });
+
+  /* ── copy buttons ─────────────────────────────────────────────────── */
+  document.querySelectorAll(".code .copy").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const pre = btn.parentElement.querySelector("pre");
+      try {
+        await navigator.clipboard.writeText(pre.innerText);
+        btn.textContent = "copied";
+        btn.classList.add("done");
+        setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("done"); }, 1400);
+      } catch { btn.textContent = "⌘C"; }
+    });
+  });
+
+  /* ── flow diagram: walk a pulse along the pipeline while it is on screen ── */
+  const flow = document.getElementById("flow");
+  if (flow && !reduced) {
+    const nodes = [...flow.querySelectorAll(".node")];
+    let i = 0, timer = null;
+    const tick = () => {
+      nodes.forEach((n, k) => n.classList.toggle("on", k === i));
+      i = (i + 1) % nodes.length;
+    };
+    new IntersectionObserver((entries) => {
+      const visible = entries[0].isIntersecting;
+      if (visible && !timer) { tick(); timer = setInterval(tick, 950); }
+      else if (!visible && timer) { clearInterval(timer); timer = null; nodes.forEach(n => n.classList.remove("on")); }
+    }, { threshold: .3 }).observe(flow);
+  }
+
+  /* ═══ terminal replay ═══════════════════════════════════════════════
+     Replays one real NightCode turn: the prompt is typed into the composer,
+     committed to the transcript, then the activity tree fills in as the agent
+     works and the answer streams out a character at a time. The spinner frames
+     and gutter marks are the ones the program actually renders.
+     ══════════════════════════════════════════════════════════════════ */
+  const SPIN = ["·", "✢", "✳", "∗", "✻", "✽"];
+  const screen   = document.getElementById("screen");
+  const composer = document.getElementById("composer");
+  const box      = document.getElementById("box");
+  const status   = document.getElementById("status");
+  const replay   = document.getElementById("replay");
+
+  const PROMPT = "why is auth failing on refresh?";
+
+  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+  /** One transcript row: a gutter mark plus its body, optionally nested a column. */
+  function row(mark, markClass, bodyHtml, opts = {}) {
+    const el = document.createElement("div");
+    el.className = "t-row" + (opts.nested ? " nested" : "") + (opts.tight ? " tight" : "");
+    el.innerHTML = opts.nested
+      ? `<span class="mk"></span><span class="mk ${markClass}">${mark}</span><span class="bd">${bodyHtml}</span>`
+      : `<span class="mk ${markClass}">${mark}</span><span class="bd">${bodyHtml}</span>`;
+    screen.appendChild(el);
+    screen.scrollTop = screen.scrollHeight;
+    return el;
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  let run = 0;               // generation counter — cancels an in-flight replay
+  const alive = (gen) => gen === run;
+
+  /** Type text into a node one character at a time. */
+  async function type(node, text, gen, speed = 34) {
+    for (let i = 1; i <= text.length; i++) {
+      if (!alive(gen)) return;
+      node.innerHTML = esc(text.slice(0, i)) + '<span class="t-caret"></span>';
+      await sleep(speed + (Math.random() * 26 | 0));
+    }
+    if (alive(gen)) node.innerHTML = esc(text);
+  }
+
+  /** A live row whose gutter mark cycles the spinner for `ms`, then resolves. */
+  async function spin(el, ms, gen) {
+    const mk = el.querySelector(".mk:not(:empty)") || el.querySelector(".mk");
+    const started = Date.now();
+    let f = 2;
+    while (Date.now() - started < ms) {
+      if (!alive(gen)) return;
+      mk.textContent = SPIN[f++ % SPIN.length];
+      await sleep(300);
+    }
+  }
+
+  function setStatus(state) {
+    status.classList.toggle("run", state === "running");
+    status.querySelector(".lbl").textContent = state === "running" ? "Running" : "Ready";
+    box.classList.toggle("busy", state === "running");
+  }
+
+  const ANSWER = [
+    { kind: "h",     text: "Root cause" },
+    { kind: "p",     html: '<span class="c-code">rotate()</span> runs <span class="c-em">after</span> the null guard in <span class="c-code">auth.ts</span>, so a refresh that lands mid-request reads a token that has already been swapped.' },
+    { kind: "lang",  text: "ts" },
+    { kind: "fence", lines: ["if (!refreshToken) return null;", "refreshToken = rotate();   // <- too late"] },
+    { kind: "p",     html: "Fix options:" },
+    { kind: "li",    html: "Rotate before the guard" },
+    { kind: "li",    html: "Or take the session lock around both" },
+  ];
+
+  async function play() {
+    const gen = ++run;
+    screen.innerHTML = "";
+    composer.innerHTML = '<span class="ph">Ask anything…</span>';
+    setStatus("ready");
+    await sleep(700);
+    if (!alive(gen)) return;
+
+    /* 1 — the user types, then commits */
+    composer.innerHTML = "";
+    await type(composer, PROMPT, gen, 42);
+    if (!alive(gen)) return;
+    await sleep(420);
+    composer.innerHTML = '<span class="ph">working…</span>';
+    setStatus("running");
+    row(">", "c-note", `<span class="c-user">${esc(PROMPT)}</span>`);
+    await sleep(360);
+    if (!alive(gen)) return;
+
+    /* 2 — background stages */
+    row("·", "c-note", '<span class="c-note">loading memory</span>', { tight: true });
+    await sleep(430);
+    if (!alive(gen)) return;
+    row("·", "c-note", '<span class="c-note">step 1 of 10</span>', { tight: true });
+    await sleep(380);
+    if (!alive(gen)) return;
+
+    /* 3 — two tool calls, each live then resolved */
+    const tools = [
+      { name: "grep", args: "pattern=refreshToken path=src", ms: 1250, dur: "0.3s",
+        result: ["src/auth.ts:42  const refreshToken = read()",
+                 "src/auth.ts:88  if (!refreshToken) return null",
+                 "… +2 lines"] },
+      { name: "read", args: "file=src/auth.ts", ms: 900, dur: "0.1s",
+        result: ["read 240 lines"] },
+    ];
+
+    for (const t of tools) {
+      const live = row(SPIN[2], "c-run",
+        `<span class="c-tool">${t.name}</span><span class="c-args">(${esc(t.args)})</span>`, { tight: true });
+      await spin(live, t.ms, gen);
+      if (!alive(gen)) return;
+
+      live.querySelector(".mk").textContent = "⏺";
+      live.querySelector(".mk").className = "mk c-ok";
+      live.querySelector(".bd").innerHTML =
+        `<span class="c-tool">${t.name}</span><span class="c-args">(${esc(t.args)})</span><span class="c-dur">  ${t.dur}</span>`;
+
+      row("⎿", "c-note",
+        t.result.map((l) => `<span class="c-res">${esc(l)}</span>`).join("<br>"),
+        { nested: true });
+      await sleep(320);
+      if (!alive(gen)) return;
+    }
+
+    /* 4 — reasoning streams into the thinking panel */
+    const think = row(SPIN[2], "c-spark", '<span class="c-spark" style="opacity:.75">thinking</span>', { tight: true });
+    const panel = row("", "", '<span class="t-think"></span>', { nested: true });
+    const pen = panel.querySelector(".t-think");
+    const thought = "the rotate() call happens after the guard, so a refresh races the read";
+    const spinner = (async () => { await spin(think, 2600, gen); })();
+    for (let i = 1; i <= thought.length; i++) {
+      if (!alive(gen)) return;
+      pen.textContent = thought.slice(0, i);
+      await sleep(24);
+    }
+    await spinner;
+    if (!alive(gen)) return;
+
+    /* the answer starts — the thinking panel collapses, exactly as in the app */
+    think.remove(); panel.remove();
+
+    /* 5 — the answer streams in */
+    const head = row("⏺", "c-mark", "", { tight: true });
+    const body = head.querySelector(".bd");
+
+    for (const blk of ANSWER) {
+      if (!alive(gen)) return;
+      const line = document.createElement("div");
+      if (blk.kind === "h")     line.innerHTML = `<span class="c-h"></span>`;
+      if (blk.kind === "p")     line.innerHTML = "";
+      if (blk.kind === "li")    line.innerHTML = `<span class="c-mark">•</span> `;
+      if (blk.kind === "lang")  { line.innerHTML = `<span class="t-lang">${blk.text}</span>`; line.style.marginTop = ".5em"; }
+      if (blk.kind === "fence") line.className = "t-fence";
+      body.appendChild(line);
+
+      if (blk.kind === "h") {
+        const t = line.querySelector(".c-h");
+        for (let i = 1; i <= blk.text.length; i++) {
+          if (!alive(gen)) return;
+          t.textContent = blk.text.slice(0, i);
+          await sleep(26);
+        }
+        line.style.marginBottom = ".55em";
+      } else if (blk.kind === "fence") {
+        for (const l of blk.lines) {
+          const ln = document.createElement("div");
+          line.appendChild(ln);
+          for (let i = 1; i <= l.length; i++) {
+            if (!alive(gen)) return;
+            ln.textContent = l.slice(0, i);
+            await sleep(14);
+          }
+        }
+        line.style.marginBottom = ".55em";
+      } else if (blk.kind === "lang") {
+        await sleep(160);
+      } else {
+        /* reveal inline-formatted HTML progressively, then swap in the real markup */
+        const tmp = document.createElement("div");
+        tmp.innerHTML = blk.html;
+        const full = tmp.textContent;
+        const prefix = blk.kind === "li" ? '<span class="c-mark">•</span> ' : "";
+        for (let i = 1; i <= full.length; i += 2) {
+          if (!alive(gen)) return;
+          line.innerHTML = prefix + esc(full.slice(0, i));
+          await sleep(11);
+        }
+        line.innerHTML = prefix + blk.html;
+        if (blk.kind === "p") line.style.marginBottom = ".55em";
+      }
+      screen.scrollTop = screen.scrollHeight;
+    }
+
+    if (!alive(gen)) return;
+    composer.innerHTML = '<span class="ph">Ask anything…</span>';
+    setStatus("ready");
+
+    await sleep(6200);
+    if (alive(gen)) play();
+  }
+
+  /** Reduced motion: paint the finished transcript, no typing, no loop. */
+  function still() {
+    screen.innerHTML = "";
+    row(">", "c-note", `<span class="c-user">${esc(PROMPT)}</span>`);
+    row("·", "c-note", '<span class="c-note">loading memory</span>', { tight: true });
+    row("·", "c-note", '<span class="c-note">step 1 of 10</span>', { tight: true });
+    row("⏺", "c-ok", '<span class="c-tool">grep</span><span class="c-args">(pattern=refreshToken path=src)</span><span class="c-dur">  0.3s</span>', { tight: true });
+    row("⎿", "c-note", '<span class="c-res">src/auth.ts:42  const refreshToken = read()<br>src/auth.ts:88  if (!refreshToken) return null<br>… +2 lines</span>', { nested: true });
+    row("⏺", "c-ok", '<span class="c-tool">read</span><span class="c-args">(file=src/auth.ts)</span><span class="c-dur">  0.1s</span>', { tight: true });
+    row("⎿", "c-note", '<span class="c-res">read 240 lines</span>', { nested: true });
+    const head = row("⏺", "c-mark", "", { tight: true });
+    head.querySelector(".bd").innerHTML =
+      '<div class="c-h" style="margin-bottom:.55em">Root cause</div>' +
+      '<div style="margin-bottom:.55em"><span class="c-code">rotate()</span> runs <span class="c-em">after</span> the null guard in <span class="c-code">auth.ts</span>, so a refresh that lands mid-request reads a token that has already been swapped.</div>' +
+      '<div class="t-lang">ts</div>' +
+      '<div class="t-fence" style="margin-bottom:.55em"><div>if (!refreshToken) return null;</div><div>refreshToken = rotate();   // &lt;- too late</div></div>' +
+      '<div style="margin-bottom:.55em">Fix options:</div>' +
+      '<div><span class="c-mark">•</span> Rotate before the guard</div>' +
+      '<div><span class="c-mark">•</span> Or take the session lock around both</div>';
+  }
+
+  if (reduced) {
+    still();
+    replay.style.display = "none";
+  } else {
+    /* only run while the terminal is actually on screen */
+    let started = false;
+    new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && !started) { started = true; play(); }
+    }, { threshold: .25 }).observe(screen);
+    replay.addEventListener("click", () => play());
+  }
+})();
+</script>
+</body>
+</html>

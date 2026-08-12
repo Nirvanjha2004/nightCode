@@ -7,38 +7,48 @@
 // existing token rather than inventing a new shade — that is what keeps a
 // terminal UI feeling like one designed surface instead of a pile of widgets.
 
+// ── Ember Night ───────────────────────────────────────────────────────────────
+// Warm accents on a cool violet-ink ground. The neutrals sit around hue 260 and
+// the accents around hue 30, which is close to complementary — that opposition
+// is what makes a single ember mark carry across a wall of dim text without
+// needing bold, a fill, or a bigger glyph.
 export const C = {
-    /** Page background. Slightly blue-black so it reads as "deep" next to pure-black terminals. */
-    bg: "#0A0A0F",
+    /** Page background — ink, not black. Pure #000 kills the accents' glow. */
+    bg: "#09080F",
     /** Raised surfaces: the input box, dropdown menus. */
-    panel: "#111119",
+    panel: "#0F0D18",
     /** Recessed surfaces: fenced code, inline code chips. */
-    panelAlt: "#17171F",
+    panelAlt: "#16121F",
     /** Hairlines: borders, dividers, rails. Never used for text. */
-    line: "#24242F",
+    line: "#241F33",
 
-    /** Barely-there text: separators, timestamps, decorative marks. */
-    faint: "#3E3E4E",
+    /** Barely-there text: separators, background steps, decorative marks. */
+    faint: "#4A4266",
     /** Secondary text: metadata, hints, tool output previews. */
-    muted: "#7A7A8E",
+    muted: "#948BB0",
     /** Body text. */
-    text: "#D2D8E8",
+    text: "#E2DCF2",
     /** Emphasis text: headings, the focused row. */
-    bright: "#EDF0F7",
+    bright: "#FDFBFF",
 
-    /** Primary accent — brand, prompts, focus. */
-    accent: "#8AB4FA",
-    /** Secondary accent — the assistant's voice, the spinner. */
-    accent2: "#C4A7F7",
+    /** Primary accent — brand, the prompt caret, focus. */
+    accent: "#FF7A2F",
+    /** Secondary accent — the assistant's voice and the thinking spinner.
+     *  Lighter than the primary on purpose: the answer is the brightest thing
+     *  on screen, and everything else recedes behind it. */
+    accent2: "#FFCE7A",
 
-    success: "#A6E3A1",
-    warn: "#F9E2AF",
-    danger: "#F38BA8",
-    peach: "#FAB387",
-    teal: "#94E2D5",
+    success: "#3DDC97",
+    warn: "#FF9F45",
+    danger: "#FF4D6D",
+    /** Inline code and the destructive-action frame. */
+    peach: "#FFB870",
+    /** The one cool accent — h3 headings. A counterpoint keeps the warm from
+     *  flattening into a single orange wash. */
+    teal: "#6BC5F0",
 
     /** Foreground for text sitting ON an accent fill (selected rows). */
-    onAccent: "#0A0A0F",
+    onAccent: "#09080F",
 } as const;
 
 /**
