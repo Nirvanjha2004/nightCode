@@ -17,7 +17,7 @@ import { act } from "react";
 import { testRender } from "@opentui/react/test-utils";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { App } from "./index";
-import type { AgentEvent } from "./agent/types";
+import type { AgentEvent } from "../agent/types";
 
 type FakeLoop = {
     execute: (

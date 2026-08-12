@@ -20,7 +20,7 @@ The cancel path is a single `AbortController` created per run in the UI and thre
 
 ```
 User presses Esc/Ctrl+C
-  └─ useKeyboard handler  (packages/cli/src/index.tsx)
+  └─ useKeyboard handler  (packages/cli/src/ui/index.tsx)
       └─ cancelRun()  →  controller.abort()
           └─ AgentLoop.execute()  observes signal at checkpoints (throwIfAborted)
               └─ GroqClient.chat()  →  groq-sdk  →  fetch(url, { signal })
@@ -89,7 +89,7 @@ A `WeakMap` keyed by `AbortSignal` means the trace is **silent on every normal r
 
 ### Trace points wired in
 
-**UI — t0 and the final render** (`packages/cli/src/index.tsx`):
+**UI — t0 and the final render** (`packages/cli/src/ui/index.tsx`):
 
 ```ts
 const controller = abortRef.current;
@@ -465,7 +465,7 @@ execute() rejected → UI shows ⚠ Cancelled — 3ms             ← was 7306ms
 | File | Change |
 |---|---|
 | `packages/cli/src/agent/cancel-latency.ts` | **new** — the trace module |
-| `packages/cli/src/index.tsx` | trace t0 in `cancelRun`, final-render line in `handleSubmit` |
+| `packages/cli/src/ui/index.tsx` | trace t0 in `cancelRun`, final-render line in `handleSubmit` |
 | `packages/cli/src/agent/loop.ts` | `logCancelLatency` at every loop phase |
 | `packages/cli/src/llm-client/groq-client.ts` | bisect lines + **abort watchdog** (the fix) |
 | `packages/cli/src/agent/tools.ts` | bash/grep kill-path trace lines |

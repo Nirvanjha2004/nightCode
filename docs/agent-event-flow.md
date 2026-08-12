@@ -63,7 +63,7 @@ options?.onEvent?.({ type, ...payload });
 
 ## 3. Consumption — App.handleAgentEvent()
 
-**File:** `packages/cli/src/index.tsx`
+**File:** `packages/cli/src/ui/index.tsx`
 
 ### Hookup
 
@@ -95,7 +95,7 @@ If the whole `execute()` promise throws (e.g. max iterations reached, or Groq 50
 
 ## 4. Rendering — React Component Chain
 
-**File:** `packages/cli/src/index.tsx`
+**File:** `packages/cli/src/ui/index.tsx`
 
 The activity feed lives **inside the messages scrollbox**, rendered **after** all finished message bubbles and **before** the standalone `ThinkingIndicator`. This keeps the user's eye anchored in the same scroll region they already watch for replies.
 

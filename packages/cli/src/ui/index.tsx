@@ -1,15 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Header } from "../components/header";
-import { InputBar } from "../components/input-bar";
+import { Header } from "./header";
+import { InputBar } from "./input-bar";
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard, useRenderer } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import "./telemetry";
-import type { AgentLoop } from "../src/agent/loop";
-import type { AgentEvent, ConfirmHook } from "./agent/types";
-import type { Command } from "../components/commands-menu/types";
-import type { AgentStatus } from "../components/status-bar";
-import { logger } from "./logger";
+import "../telemetry";
+import type { AgentLoop } from "../agent/loop";
+import type { AgentEvent, ConfirmHook } from "../agent/types";
+import type { Command } from "./commands-menu/types";
+import type { AgentStatus } from "./status-bar";
+import { logger } from "../logger";
 import { MarkdownContent, type MdPalette } from "./markdown";
 // Display-only — agent context lives in backend MessageManager, not here
 type DisplayMessage = {

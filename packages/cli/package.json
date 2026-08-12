@@ -1,6 +1,6 @@
 {
   "name": "@nightcode/cli",
-  "module": "src/index.tsx",
+  "module": "src/ui/index.tsx",
   "type": "module",
   "private": true,
   "scripts": {

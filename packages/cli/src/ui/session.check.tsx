@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { act } from "react";
 import { testRender } from "@opentui/react/test-utils";
 import { App } from "./index";
-import type { AgentEvent } from "./agent/types";
+import type { AgentEvent } from "../agent/types";
 
 type FakeLoop = {
     execute: (

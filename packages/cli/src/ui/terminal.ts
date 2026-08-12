@@ -1,10 +1,10 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { createElement } from "react";
-import type { AgentLoop } from "../src/agent/loop";
-import type { Command } from "../components/commands-menu/types";
+import type { AgentLoop } from "../agent/loop";
+import type { Command } from "./commands-menu/types";
 import { App } from "./index";
-import { logger } from "./logger";
+import { logger } from "../logger";
 
 export class TerminalUI {
     constructor(

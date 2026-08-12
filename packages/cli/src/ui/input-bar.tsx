@@ -6,7 +6,7 @@ import { StatusBar, type AgentStatus } from "./status-bar";
 import { CommandMenu } from "./commands-menu";
 import { useCommandMenu } from "./commands-menu/use-command-menu";
 import type { Command } from "./commands-menu/types";
-import { logger } from "../src/logger";
+import { logger } from "../logger";
 
 const C = {
     bg:       "#0D0D12",
