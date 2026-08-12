@@ -5,190 +5,49 @@ import type { ContextType, MessageType } from "./types";
 import type { ChatLLM } from "../llm-client/types";
 import { logger } from "../logger";
 
-const systemPrompt = `You are NightCode, a terminal-based AI coding agent that helps users understand, modify, and manage code and files on their local machine.
-
-## Available tools
-
-- read(file) — read the full contents of a file.
-- write(file, content) — create or overwrite a file.
-- append(file, content) — append content to a file.
-- edit(file, oldText, newText) — replace an exact text match inside a file.
-- delete(file) — permanently delete a file.
-- mkdir(dir) — create a directory.
-- ls(dir) — list directory contents.
-- glob(pattern) — search files by glob.
-- find(root, name) — recursively search for a filename.
-- grep(pattern, path?, glob?, ignoreCase?) — search code using ripgrep.
-- rename(from, to) — rename or move a file.
-- copy(from, to) — copy a file.
-- bash(command) — execute shell commands and return stdout, stderr and exit code.
-- todoWrite(todos) — record and update a checklist plan for multi-step tasks (status: pending | in_progress | completed).
-- spawn_subagent(task, allowedTools) — delegate a focused, self-contained investigation to a fresh agent with isolated context; only its final summary returns.
-
----
-
-## Subagents
-
-- Use spawn_subagent for exploratory or investigative sub-tasks whose intermediate steps would clutter the main conversation (e.g. searching many files).
-- The task description must be fully self-contained — the subagent cannot see this conversation.
-- Scope allowedTools tightly (e.g. read/grep/glob for investigation); only the subagent's final summary comes back to you.
-
----
-
-# Core Principles
-
-- Never assume file contents, paths, APIs, or project structure.
-- Investigate first, then modify.
-- Use the minimum number of edits necessary.
-- Preserve the user's existing code style and architecture.
-- Never modify unrelated code.
-- If a tool reports an error, treat it as ground truth instead of guessing.
-
----
-
-# Working With Files
-
-Before modifying an existing file:
-
-1. Read it first.
-2. Understand the surrounding context.
-3. Edit only the required sections.
-
-Prefer:
-
-edit
->
-
-write
-
-because write replaces the entire file.
-
-Only use write when:
-
-- creating a new file
-- replacing the entire contents intentionally
-
-Never fabricate file contents.
-
-If multiple candidate files exist, investigate before choosing.
-
----
-
-# Tool Usage
-
-Use tools instead of reasoning from assumptions.
-
-Examples:
-
-- use grep before guessing where something is implemented
-- use glob/find before assuming filenames
-- use bash for builds, tests, git, package managers and shell commands
-
-Never describe tool calls in natural language.
-
-Never output JSON or XML representing tool calls.
-
-Only use the native tool calling interface.
-
----
-
-# Repository Awareness
-
-Assume the workspace is a Git repository.
-
-When solving coding tasks:
-
-- Use "git status" when repository state matters.
-- Before declaring success, inspect your changes using "git diff" (or "git diff <file>".
-- Never overwrite unrelated user modifications.
-- Never commit, push, checkout, reset, clean, stash or rebase unless explicitly requested.
-
----
-
-# Verification
-
-Do not assume code works.
-
-Whenever possible:
-
-1. Run the relevant tests.
-2. Run builds when appropriate.
-3. Read compiler/runtime errors carefully.
-4. Fix the root cause.
-5. Repeat until verification succeeds.
-
-Prefer running the smallest relevant test instead of an entire suite.
-
-Before reporting completion, verify your implementation using Git diff and any relevant validation commands.
-
----
-
-# Bash Usage
-
-The Bash tool is your interface to the operating system.
-
-Use it whenever appropriate, including:
-
-- git
-- rg
-- npm
-- pnpm
-- yarn
-- bun
-- cargo
-- go
-- pytest
-- uv
-- make
-- cmake
-- docker
-- kubectl
-
-Prefer focused commands that produce concise output.
-
-Avoid commands that generate excessive output unless necessary.
-
-Never execute destructive shell commands unless explicitly requested.
-
----
-
-# Communication
-
-Keep responses short.
-
-Do not narrate every step.
-
-Only ask questions when blocked by genuine ambiguity.
-
-When finished:
-
-- briefly explain what changed
-- mention any verification performed
-- mention any remaining limitations if applicable
-
----
-
-# Memory
-
-An automatic background memory system exists.
-
-Never read or modify files inside the memory directory.
-
-Do not attempt to store memories manually.
-
-Simply respond naturally.
-
----
-
-# Safety
-
-Never bypass confirmation for destructive operations.
-
-Never attempt to circumvent tool restrictions.
-
-If a requested operation is dangerous or irreversible, wait for explicit user confirmation.
-
-Always prioritize preserving user data.`;
+// ── System prompt (Pi-style, compact) ────────────────────────────────────
+// Matches the Pi coding agent's prompt shape: a short identity line, the
+// available-tools list (one-line snippets built from the ACTUAL tool surface
+// so the prompt and the native tool-calling definitions never drift), a few
+// guidelines, and the working directory. The full memory context is still
+// appended below when available — memory stays a NightCode feature.
+const baseSystemPrompt = `You are an expert coding assistant operating inside NightCode, a terminal-based coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+
+Guidelines:
+- Be concise in your responses
+- Show file paths clearly when working with files
+- Never assume file contents, paths, or project structure — investigate first, then modify
+- Prefer edit over write when modifying existing files
+- Use git status and git diff to verify changes before declaring success
+- Run the smallest relevant test or build to verify your work
+- Never read or modify files inside the memory/ directory, and never try to store memories manually
+- Destructive operations require user confirmation — never bypass it`;
+
+/** One-line prompt snippets for the model-visible tool surface (Pi-style). */
+const TOOL_SNIPPETS: Record<string, string> = {
+    read: "Read the full text contents of a file. Use before editing or inspecting any file.",
+    write: "Create a new file, or overwrite an existing one (replaces the ENTIRE file — prefer edit for changes).",
+    edit: "Replace one exact occurrence of oldText with newText inside a file. Preferred for targeted changes.",
+    bash: "Run a shell command (tests, builds, git, package managers, etc.); returns stdout, stderr, exit code.",
+    grep: "Search the contents of files with ripgrep — every file and line matching a regex pattern.",
+    find: "Recursively search for files by exact name under a directory.",
+    ls: "List the immediate contents (files and subdirectories) of a directory.",
+    todoWrite: "Record and update a checklist plan for multi-step tasks as work progresses.",
+    spawn_subagent: "Delegate a self-contained sub-task to a fresh isolated agent; only its final summary returns.",
+};
+
+/**
+ * The model-visible tool surface — Pi's default set (read, write, edit, bash,
+ * grep, find, ls) plus NightCode's subagent delegation and task planning. The
+ * remaining tools (append, delete, mkdir, glob, rename, copy) stay registered
+ * and executable but are NOT advertised to the model, keeping the surface
+ * lean. Restricting happens here, in the context builder, so no tool code,
+ * registration order, or subagent scoping needs to change.
+ */
+const VISIBLE_TOOLS = new Set([
+    "read", "write", "edit", "bash", "grep", "find", "ls",
+    "todoWrite", "spawn_subagent",
+]);
 
 // ── Context window management ───────────────────────────────────────────
 // The compression threshold is derived from the ACTIVE model's context window
@@ -389,8 +248,23 @@ export class ContextBuilder {
         // Map internal Tool → the neutral wire shape (adapters convert further).
         // Tool restrictions are enforced here: restricted tools are not merely
         // "discouraged" in the prompt, they are excluded from the tool list the
-        // model actually receives.
-        const toolList = this.toolRegistry.listFiltered(allowedTools);
+        // model actually receives. On top of the allowedTools scope, the surface
+        // is capped to VISIBLE_TOOLS (Pi-style lean surface) — hidden tools stay
+        // registered for slash-command scopes and subagents but are never
+        // advertised to the model.
+        const toolList = this.toolRegistry
+            .listFiltered(allowedTools)
+            .filter((tool) => VISIBLE_TOOLS.has(tool.name));
+        // A scope that requested a hidden tool silently drops it — log so a
+        // "context with 0 tools" is diagnosable instead of mysterious.
+        if (allowedTools) {
+            const dropped = allowedTools.filter((name) => !VISIBLE_TOOLS.has(name));
+            if (dropped.length > 0) {
+                logger.debug(
+                    `[Context] allowed-tools scope asked for ${dropped.join(", ")} — hidden by the model-visible surface (registered, not advertised)`
+                );
+            }
+        }
         const tools: ContextType["tools"] = toolList
             .map((tool) => ({
                 type: "function" as const,
@@ -401,9 +275,19 @@ export class ContextBuilder {
                 },
             }));
 
-        let resolvedSystemPrompt = systemPrompt;
+        // Pi-style prompt composition: the "Available tools" list mirrors the
+        // actual (filtered) surface, so the prompt and the native tool-calling
+        // definitions always agree.
+        const availableTools = toolList.length
+            ? toolList.map((tool) => `- ${tool.name}: ${TOOL_SNIPPETS[tool.name] ?? tool.description}`).join("\n")
+            : "(none)";
+        let resolvedSystemPrompt =
+            `${baseSystemPrompt}\n\nAvailable tools:\n${availableTools}` +
+            // process.cwd() is what read/write/bash actually resolve relative
+            // paths against — never claim PROJECT_ROOT here.
+            `\n\nCurrent working directory: ${process.cwd()}`;
         if (memoryContext) {
-            resolvedSystemPrompt = `${systemPrompt}\n\n${memoryContext}`;
+            resolvedSystemPrompt = `${resolvedSystemPrompt}\n\n${memoryContext}`;
         }
         logger.debug(`[ContextBuilder] Context ready — ${modelMessages.length} messages, ${tools.length} tools`);
 

@@ -27,11 +27,11 @@ NightCode is a coding agent that lives in your terminal. You chat with it, it in
 
 Highlights:
 
-- **Real tool use** — 15 tools including file operations, ripgrep search, and shell execution.
+- **Real tool use** — 15 tools built in; the model sees a lean Pi-style surface of 9 (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `todoWrite`, `spawn_subagent`).
 - **Automatic memory** — the agent learns durable facts, reusable rules, and notable events between sessions, stored in the repo root.
 - **Safe by default** — destructive commands pause for explicit confirmation before running.
 - **Cancellable** — `Esc` / `Ctrl+C` stops a run between steps; `^C^C` exits.
-- **Self-checked** — 13 standalone assertion-based check scripts cover the provider layer (errors, streams, registry, transports incl. SigV4 vectors), loop, tools, cancellation, UI, and memory wiring.
+- **Self-checked** — 14 standalone assertion-based check scripts cover the provider layer (errors, streams, registry, transports incl. SigV4 vectors), the prompt/tool surface, loop, tools, cancellation, UI, and memory wiring.
 
 > **Status:** a personal/hobby project with a provider-neutral LLM layer (25+ providers, BYOK) and no session persistence yet. See [§5](#5-nightcode-vs-pi-terminal-agent) for an honest comparison against Pi and [§6](#6-whats-left--roadmap) for what's next.
 
@@ -81,7 +81,7 @@ bun run packages/cli/src/ui/scroll.check.tsx
 | Feature | How |
 |---|---|
 | ReAct loop | `AgentLoop` runs up to 10 iterations of context → LLM → tool calls → result, until a final text answer |
-| 15 tools | `read`, `write`, `append`, `edit`, `delete`, `mkdir`, `ls`, `glob`, `find`, `grep` (ripgrep), `rename`, `copy`, `bash`, `todoWrite`, `spawn_subagent` |
+| 15 tools | Model-visible surface is Pi-style: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `todoWrite`, `spawn_subagent` (the rest — `append`, `delete`, `mkdir`, `glob`, `rename`, `copy` — stay registered for scopes but aren't advertised) |
 | Tool result handling | Shell tools return formatted stdout/stderr/exit code as a *result* (not an exception) so the agent can recover; structured `{ ok: false }` signals UI failure |
 | Context window management | At ~100k estimated tokens, old messages are LLM-summarized (chainable across compressions), preserving the last 15 messages; hard fallbacks keep the window bounded |
 | Human-in-the-loop | Destructive tools (`write`, `delete`, `rename`, `copy`, risky `bash`) pause for a `Y/N` confirmation dialog before executing |
@@ -118,7 +118,7 @@ bun run packages/cli/src/ui/scroll.check.tsx
 
 - **Logging** — winston JSON to `logs/` (combined + error), colorized console to stderr
 - **Tracing** — OpenTelemetry spans across agent/loop/tool/memory with OTLP-HTTP export (`localhost:4318`)
-- **Self-checks** — 13 `*.check.*` scripts (no framework, plain `node:assert` + `@opentui/react/test-utils`) covering provider errors, stream normalization, the provider registry, transports (mock servers + SigV4 test vectors), activity events, cancellation, commands, tools, subagents, markdown, scroll, session UX, and narrow-width layout
+- **Self-checks** — 14 `*.check.*` scripts (no framework, plain `node:assert` + `@opentui/react/test-utils`) covering provider errors, stream normalization, the provider registry, transports (mock servers + SigV4 test vectors), the model-visible prompt/tool surface, activity events, cancellation, commands, tools, subagents, markdown, scroll, session UX, and narrow-width layout
 - **Repo-root storage** — `memory/`, `logs/`, and `commands/` are anchored to the project root via `src/paths.ts` (module-location-derived), so the CLI behaves identically from any launch directory
 
 ---
@@ -139,7 +139,7 @@ nightCode/
         ├── agent/                  # the agent subsystem
         │   ├── loop.ts             # AgentLoop — ReAct loop, cancellation, events, memory trigger
         │   ├── agent-harness.ts    # memory context build + task-complete extraction
-        │   ├── context.ts          # ContextBuilder — system prompt, tool list, summarization
+        │   ├── context.ts          # ContextBuilder — Pi-style system prompt, 9-tool surface, summarization
         │   ├── commands.ts         # CommandRegistry + resolveSlashCommand
         │   ├── messages.ts  session.ts  registry.ts   # history / sessions / tool registry
         │   ├── tools.ts            # all 15 tools + destructive guards
@@ -192,7 +192,7 @@ Pi's #6 rank is **not** explained by its feature list. It is explained by what �
 |---|---|---|
 | What it is | Single terminal coding agent (one package) | Monorepo: agent toolkit + coding-agent CLI (`pi-agent-core`, `pi-ai`, `pi-tui`, `pi-coding-agent`) |
 | Runtime / stack | Bun + TypeScript, React (`@opentui`) | TypeScript, custom differential-rendering TUI (`pi-tui`) |
-| System prompt & tool surface | Large prompt + 15 tools + **full memory dump every turn** | **<1,000-token** core prompt, **7 default tools** (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`), no hidden scaffolding |
+| System prompt & tool surface | **Compact Pi-style prompt (~700 tokens)** + **9-tool model-visible surface** (Pi's 7 + `todoWrite` + `spawn_subagent`) + full memory dump every turn ([docs/prompt-and-tools.md](docs/prompt-and-tools.md)) | **<1,000-token** core prompt, **7 default tools** (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`), no hidden scaffolding |
 | Model providers | **25+** — OpenAI, Anthropic, Gemini, Groq, DeepSeek, Mistral, OpenRouter, Bedrock, Vertex, Azure, Ollama, … one internal interface + per-provider adapters ([docs/providers.md](docs/providers.md)) | **20+** — with unified token normalization |
 | Execution modes | Interactive TUI only | Interactive TUI, print/JSON (pipes), RPC, embeddable SDK |
 | Streaming | ⏳ Providers stream through one normalized event format (text/reasoning/tool deltas); the loop still consumes full responses — incremental UI rendering is on the roadmap (§6) | ✅ Real-time streaming of thoughts/tools/text |
@@ -200,7 +200,7 @@ Pi's #6 rank is **not** explained by its feature list. It is explained by what �
 | Context loading | ✅ LLM summarization past ~100k tokens (chained) | ✅ Compaction + branch summarization into structured checkpoints |
 | Memory | ✅ Automatic semantic/procedural/episodic memory (Groq classifier + Jina embeddings), persisted to repo root | No cross-session "fact" memory by default — relies on `AGENTS.md` + skills + compaction |
 | Progressive disclosure | ❌ Memory injected wholesale into every system prompt | ✅ Only `AGENTS.md`/`CLAUDE.md` blocks + skill **names** in the prompt; full skill read on demand via `read` |
-| Tools | 15 built-in (file, shell, ripgrep, todo, subagent) | 7 built-in + **extension-registered** tools (`defineTool`, `--tools`/`--exclude-tools` filters) |
+| Tools | 15 built-in; **9 model-visible** (Pi-style surface — see [docs/prompt-and-tools.md](docs/prompt-and-tools.md)); 6 registered-but-hidden | 7 built-in + **extension-registered** tools (`defineTool`, `--tools`/`--exclude-tools` filters) |
 | Subagents | ✅ Built-in `spawn_subagent` tool (scoped, isolated) | ✅ Flexible multi-agent primitives via extensions |
 | Slash commands | ✅ `commands/*.md` templates + `/clear` | ✅ Built-in + extension-registered (`.pi/prompts/`) |
 | Mid-turn steering | ❌ No | ✅ `steer`/`followUp` message queueing — inject corrections without aborting the turn |
@@ -219,7 +219,7 @@ Terminal-bench measures **real CLI task completion** — git workflows, package 
 | Driver | Pi | NightCode | Leverage for NightCode |
 |---|---|---|---|
 | **Model access** | 20+ providers → can run Claude/GPT-class models | **25+ providers** — BYOK: OpenAI, Anthropic, Gemini, Groq, DeepSeek, Mistral, OpenRouter, Bedrock, local (Ollama/vLLM/…) | ✅ Closed — was the single biggest gap |
-| **Harness minimalism** | <1,000-token prompt, 7 tools, transparent channel to the shell | Large prompt + 15 tools + memory dump injected every turn | 🔥🔥 High — context headroom is directly spent on the task. |
+| **Harness minimalism** | <1,000-token prompt, 7 tools, transparent channel to the shell | Compact Pi-style prompt (~700 tokens) + 9-tool surface; memory dump still injected every turn | 🔥🔥 High — partially addressed; headroom still spent on the memory dump. |
 | **Progressive disclosure** | Context/skills loaded on demand, never pre-injected | Full semantic + procedural memory injected into every system prompt | 🔥🔥 Medium-high — same headroom argument. |
 | **Eval-harness integration** | print/JSON + RPC modes; **Harbor adapter** (`badlogic/pi-terminal-bench`) | Interactive TUI only — cannot even be benchmarked as-is | 🔥 Medium — required to measure anything. |
 | **Session state** | Tree DAG — branch/retry/compact without losing context | Linear, in-memory | 🔥 Low for benchmark scores; high for real-world UX |
@@ -240,7 +240,7 @@ The roadmap is split into two tracks, because "missing" means two different thin
 ### 6.1 Track A — benchmark drivers
 
 1. ~~**Provider-agnostic client**~~ ✅ **Done** — provider-neutral LLM layer with 25+ providers, BYOK env config, per-provider adapters, normalized streaming/errors/usage ([docs/providers.md](docs/providers.md)).
-2. **Slim the system prompt & tool surface** 🔥🔥 — measure current prompt size; trim the 15-tool list toward essentials; remove mid-session injections.
+2. **Slim the system prompt & tool surface** 🔥🔥 — ⏳ partially done: Pi-style compact prompt + 9-tool model-visible surface ([docs/prompt-and-tools.md](docs/prompt-and-tools.md)); remaining piece is removing the mid-session memory dump (progressive disclosure).
 3. **Progressive memory disclosure** 🔥🔥 — stop injecting the full semantic/procedural dump every turn; inject a compact summary or only the slices relevant to the current query (episodic retrieval is already query-relative).
 4. **Non-interactive mode + eval adapter** 🔥 — a print/JSON execution mode so NightCode can run under terminal-bench/Harbor and be measured at all.
 5. **Session tree / branching** — DAG history with fork/retry/compact, mirroring Pi's `/tree` `/fork` `/clone`.
@@ -275,6 +275,7 @@ The roadmap is split into two tracks, because "missing" means two different thin
 | [`docs/error-recovery.md`](docs/error-recovery.md) | Tool failure signaling (`{ ok: false }`) and concise error summaries |
 | [`docs/cancel-latency-postmortem.md`](docs/cancel-latency-postmortem.md) | Cancellation latency fix and watchdog design |
 | [`docs/providers.md`](docs/providers.md) | Provider-neutral LLM layer — providers, auth, custom/local models, troubleshooting |
+| [`docs/prompt-and-tools.md`](docs/prompt-and-tools.md) | Pi-style system prompt + model-visible tool surface — structure, customization, interactions |
 
 **Conventions:** checks live next to the code they test (`*.check.ts` / `*.check.tsx`, run directly) · runtime data always goes to the repo root via `src/paths.ts` · `ui/` may import `agent/` types, never the reverse · no `utils/`/`helpers/` dumping grounds — group by responsibility.
 
