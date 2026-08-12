@@ -1,23 +1,23 @@
 import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import { homedir } from "node:os";
+import { C, G } from "./theme";
 
-const C = {
-    blue:     "#89B4FA",
-    subtitle: "#6B6B7B",
-    green:    "#A6E3A1",
-    yellow:   "#F9E2AF",
-    peach:    "#FAB387",
-    red:      "#F38BA8",
-};
+// Fields drop out entirely as the terminal narrows, rather than all of them
+// shrinking together into a row of "g…b · …e ·" stubs. A field is either
+// readable or absent; a truncated one is just noise wearing a label's clothes.
+const MIN_WIDTH_MODEL = 34;
+const MIN_WIDTH_SESSION = 46;
+const MIN_WIDTH_CWD = 62;
 
 /** Lifecycle of the agent loop as seen from the UI. */
 export type AgentStatus = "ready" | "running" | "cancelled" | "error";
 
 const STATUS_COLOR: Record<AgentStatus, string> = {
-    ready:     C.green,
-    running:   C.yellow,
+    ready:     C.success,
+    running:   C.warn,
     cancelled: C.peach,
-    error:     C.red,
+    error:     C.danger,
 };
 
 const STATUS_LABEL: Record<AgentStatus, string> = {
@@ -46,45 +46,58 @@ function compactPath(p: string, maxLen: number): string {
     return tail.length < withTilde.length ? `…/${tail}` : withTilde;
 }
 
-export function StatusBar({ model, cwd, status, sessionNumber }: StatusBarProps) {
+/** A `·` spacer that never shrinks, so the fields either side stay legible. */
+function Sep() {
     return (
-        <box
-            flexDirection="row"
-            gap={1}
-            alignItems="center"
-            width="100%"
-        >
-            {/* Model · Working Directory · Current State.
-                wrapMode="none" keeps the bar on ONE row on narrow terminals; the
-                model and path absorb the shrink (truncate adds the …), while the
-                separators and status label never shrink so the state stays readable. */}
-            <text attributes={TextAttributes.BOLD} fg={C.blue} wrapMode="none" truncate>
-                {model}
-            </text>
+        <text attributes={TextAttributes.DIM} fg={C.faint} wrapMode="none" flexShrink={0}>
+            ·
+        </text>
+    );
+}
 
-            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" flexShrink={0}>
-                ·
-            </text>
+export function StatusBar({ model, cwd, status, sessionNumber }: StatusBarProps) {
+    const { width } = useTerminalDimensions();
 
-            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" truncate>
-                {compactPath(cwd, 40)}
+    return (
+        <box flexDirection="row" gap={1} alignItems="center" width="100%">
+            {/* State leads the row: it is the one field worth reading at any width,
+                so it goes first and never shrinks. wrapMode="none" throughout keeps
+                the whole bar on ONE row — the model and path absorb any overflow. */}
+            <text fg={STATUS_COLOR[status]} wrapMode="none" flexShrink={0}>
+                {G.pip}
             </text>
-
-            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" flexShrink={0}>
-                ·
-            </text>
-
-            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" truncate>
-                session {sessionNumber}
-            </text>
-
-            <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="none" flexShrink={0}>
-                ·
-            </text>
-
             <text attributes={TextAttributes.BOLD} fg={STATUS_COLOR[status]} wrapMode="none" flexShrink={0}>
                 {STATUS_LABEL[status]}
             </text>
+
+            {width >= MIN_WIDTH_MODEL && (
+                <>
+                    <Sep />
+                    <text fg={C.muted} wrapMode="none" truncate>
+                        {model}
+                    </text>
+                </>
+            )}
+
+            {width >= MIN_WIDTH_CWD && (
+                <>
+                    <Sep />
+                    <text attributes={TextAttributes.DIM} fg={C.faint} wrapMode="none" truncate>
+                        {compactPath(cwd, 40)}
+                    </text>
+                </>
+            )}
+
+            {width >= MIN_WIDTH_SESSION && (
+                <>
+                    <Sep />
+                    {/* Never shrinks: "sessi…" would be worse than useless — the
+                        number is the entire point of the field. */}
+                    <text attributes={TextAttributes.DIM} fg={C.faint} wrapMode="none" flexShrink={0}>
+                        session {sessionNumber}
+                    </text>
+                </>
+            )}
         </box>
     );
 }

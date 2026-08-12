@@ -132,10 +132,15 @@ async function main() {
         "long code line must be clipped, not wrapped across rows"
     );
 
-    // long prose actually wrapped onto multiple rows
-    const hasFirstRow = narrowFrame.split("\n").some((l) => l.includes("A paragraph that is"));
-    const hasLastRow = narrowFrame.split("\n").some((l) => l.includes("stays readable."));
-    assert.ok(hasFirstRow && hasLastRow, "long paragraph wrapped across multiple rows");
+    // long prose actually wrapped onto multiple rows. Asserted as "the tail landed
+    // on a LATER row than the head" rather than by matching a fixed pair of
+    // fragments — which words share a row depends on the exact content width, so
+    // fragment matching would break on any change to the transcript's gutters.
+    const narrowRows = narrowFrame.split("\n");
+    const headRow = narrowRows.findIndex((l) => l.includes("A paragraph that is"));
+    const tailRow = narrowRows.findIndex((l) => l.includes("readable."));
+    assert.ok(headRow >= 0, "long paragraph rendered");
+    assert.ok(tailRow > headRow, "long paragraph wrapped across multiple rows");
 
     console.log("PASS — assistant markdown renders cleanly (headings, bold, code, lists, wrapping).");
     process.exit(0);

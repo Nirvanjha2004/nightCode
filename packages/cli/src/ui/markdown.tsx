@@ -7,15 +7,42 @@
 // Anything not recognized is shown verbatim (never silently dropped).
 import type { ReactNode } from "react";
 import { TextAttributes } from "@opentui/core";
+import { C } from "./theme";
 
-/** Color subset the renderer needs; the UI passes its own palette. */
+/** Color roles the renderer needs. Callers may override any of them. */
 export type MdPalette = {
     text: string;
-    blue: string;
-    teal: string;
-    peach: string;
-    surface1: string;
-    surface2: string;
+    /** Heading colors, h1 → h3. */
+    h1: string;
+    h2: string;
+    h3: string;
+    /** Inline code chip: foreground on background. */
+    code: string;
+    codeBg: string;
+    /** Fenced-code block: background and the left rail that marks it. */
+    blockBg: string;
+    rail: string;
+    /** List markers. */
+    marker: string;
+    /** Link labels. */
+    link: string;
+    /** Language tags and other de-emphasized annotations. */
+    muted: string;
+};
+
+/** The palette assistant replies use unless a caller overrides it. */
+export const MD_PALETTE: MdPalette = {
+    text: C.text,
+    h1: C.bright,
+    h2: C.accent,
+    h3: C.teal,
+    code: C.peach,
+    codeBg: C.panelAlt,
+    blockBg: C.panelAlt,
+    rail: C.line,
+    marker: C.accent2,
+    link: C.accent,
+    muted: C.faint,
 };
 
 // ── inline tokens ───────────────────────────────────────────────────────
@@ -78,7 +105,7 @@ function inlineNodes(nodes: Inline[], palette: MdPalette, keyPrefix: string): Re
                 return n.v;
             case "code":
                 return (
-                    <span key={key} fg={palette.peach} bg={palette.surface2}>
+                    <span key={key} fg={palette.code} bg={palette.codeBg}>
                         {n.v}
                     </span>
                 );
@@ -88,7 +115,7 @@ function inlineNodes(nodes: Inline[], palette: MdPalette, keyPrefix: string): Re
                 return <em key={key}>{inlineNodes(n.c, palette, key)}</em>;
             case "link":
                 return (
-                    <span key={key} fg={palette.blue}>
+                    <span key={key} fg={palette.link}>
                         {n.label} ({n.href})
                     </span>
                 );
@@ -100,13 +127,13 @@ function inlineNodes(nodes: Inline[], palette: MdPalette, keyPrefix: string): Re
 type Block =
     | { t: "heading"; level: number; line: string }
     | { t: "paragraph"; lines: string[] }
-    | { t: "code"; lines: string[] }
+    | { t: "code"; lang: string; lines: string[] }
     | { t: "list"; ordered: boolean; start: number; items: string[] };
 
 const BULLET_RE = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED_RE = /^\s*(\d+)\.\s+(.*)$/;
 const HEADING_RE = /^(#{1,3})\s+(.*)$/;
-const FENCE_RE = /^```\w*\s*$/;
+const FENCE_RE = /^```(\w*)\s*$/;
 const BLOCK_START = /^(#{1,3})\s|^```|^\s*[-*+]\s|^\s*\d+\.\s/;
 
 function parseBlocks(md: string): Block[] {
@@ -115,12 +142,13 @@ function parseBlocks(md: string): Block[] {
     let i = 0;
     while (i < lines.length) {
         const line = lines[i]!;
-        if (FENCE_RE.test(line)) {
+        const fence = line.match(FENCE_RE);
+        if (fence) {
             const code: string[] = [];
             i++;
             while (i < lines.length && !/^```\s*$/.test(lines[i]!)) code.push(lines[i++]!);
             i++; // skip the closing fence (or run off the end — tolerate an unclosed fence)
-            blocks.push({ t: "code", lines: code });
+            blocks.push({ t: "code", lang: fence[1] ?? "", lines: code });
             continue;
         }
         const heading = line.match(HEADING_RE);
@@ -178,7 +206,7 @@ function parseBlocks(md: string): Block[] {
 function BlockView({ block, palette }: { block: Block; palette: MdPalette }) {
     switch (block.t) {
         case "heading": {
-            const fg = block.level === 1 ? palette.blue : block.level === 2 ? palette.teal : palette.peach;
+            const fg = block.level === 1 ? palette.h1 : block.level === 2 ? palette.h2 : palette.h3;
             return (
                 <text fg={fg} attributes={TextAttributes.BOLD} wrapMode="word">
                     {inlineNodes(parseInline(block.line), palette, "h")}
@@ -196,13 +224,31 @@ function BlockView({ block, palette }: { block: Block; palette: MdPalette }) {
             // long lines are clipped at the container edge instead of breaking layout.
             // Tabs become spaces (terminals render tab stops unpredictably inside a
             // fixed-width text buffer, which would misalign indented code).
+            //
+            // A left rail plus a recessed fill marks the block without drawing a
+            // full frame around it: a box border would eat two columns of code on
+            // narrow terminals and fight the surrounding prose for attention.
             return (
-                <box backgroundColor={palette.surface1} paddingX={2} paddingY={1} flexDirection="column">
-                    {block.lines.map((l, i) => (
-                        <text key={i} fg={palette.text} wrapMode="none">
-                            {l.replace(/\t/g, "    ")}
+                <box flexDirection="column" overflow="hidden">
+                    {block.lang ? (
+                        <text fg={palette.muted} attributes={TextAttributes.DIM} wrapMode="none">
+                            {block.lang}
                         </text>
-                    ))}
+                    ) : null}
+                    <box
+                        border={["left"]}
+                        borderColor={palette.rail}
+                        backgroundColor={palette.blockBg}
+                        paddingX={1}
+                        flexDirection="column"
+                        overflow="hidden"
+                    >
+                        {block.lines.map((l, i) => (
+                            <text key={i} fg={palette.text} wrapMode="none">
+                                {l.replace(/\t/g, "    ")}
+                            </text>
+                        ))}
+                    </box>
                 </box>
             );
         case "list":
@@ -210,7 +256,9 @@ function BlockView({ block, palette }: { block: Block; palette: MdPalette }) {
                 <box flexDirection="column">
                     {block.items.map((item, i) => (
                         <box key={i} flexDirection="row" gap={1}>
-                            <text fg={palette.teal}>{block.ordered ? `${block.start + i}.` : "•"}</text>
+                            <text fg={palette.marker} wrapMode="none">
+                                {block.ordered ? `${block.start + i}.` : "•"}
+                            </text>
                             <text fg={palette.text} wrapMode="word">
                                 {inlineNodes(parseInline(item), palette, `l${i}`)}
                             </text>
@@ -222,7 +270,7 @@ function BlockView({ block, palette }: { block: Block; palette: MdPalette }) {
 }
 
 /** Renders an assistant Markdown reply. Unknown syntax stays visible as text. */
-export function MarkdownContent({ content, palette }: { content: string; palette: MdPalette }) {
+export function MarkdownContent({ content, palette = MD_PALETTE }: { content: string; palette?: MdPalette }) {
     const blocks = parseBlocks(content);
     return (
         <box flexDirection="column" gap={1}>

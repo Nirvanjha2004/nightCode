@@ -3,6 +3,7 @@ import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 
 import { getFiltererdCommands } from "./filter-commands";
 import type { Command } from "./types";
+import { C } from "../theme";
 
 const MAX_VISIBLE_ITEMS = 8;
 
@@ -23,7 +24,7 @@ export function CommandMenu(props : CommandMenuProps) {
     if(filtered.length === 0) {
         return (
             <box paddingX={1} paddingY={1}>
-                <text attributes={TextAttributes.DIM} fg="#6B6B7B">no matching commands</text>
+                <text attributes={TextAttributes.DIM} fg={C.muted}>no matching commands</text>
             </box>
         )
     };
@@ -32,8 +33,6 @@ export function CommandMenu(props : CommandMenuProps) {
         <scrollbox
           ref={scrollRef}
           height={visibleHeight}
-          border={["left"]}
-          borderColor="#2A2A3A"
         >
             {filtered.map((command, index) => {
                 const isSelected = index === selectedIndex;
@@ -44,19 +43,24 @@ export function CommandMenu(props : CommandMenuProps) {
                       paddingX={1}
                       height={1}
                       overflow="hidden"
-                      backgroundColor={isSelected ? "#89B4FA" : undefined}
+                      backgroundColor={isSelected ? C.accent : undefined}
                       onMouseDown={() => onSelect(index)}
                       onMouseMove={() => onExecute(index)}
                     >
+                        {/* The selected row is a solid accent fill rather than a
+                            marker column: it reads at a glance while scanning, and
+                            costs no horizontal space on a narrow terminal. */}
                         <text
-                          attributes={isSelected ? TextAttributes.BOLD : TextAttributes.DIM}
-                          fg={isSelected ? "#0D0D12" : "#C0C0D0"}
+                          attributes={TextAttributes.BOLD}
+                          fg={isSelected ? C.onAccent : C.text}
+                          wrapMode="none"
                         >
                             {command.name}
                         </text>
                         <text
                           attributes={TextAttributes.DIM}
-                          fg={isSelected ? "#0D0D12" : "#6B6B7B"}
+                          fg={isSelected ? C.onAccent : C.faint}
+                          wrapMode="none"
                         >
                             {" "}
                             {command.value}

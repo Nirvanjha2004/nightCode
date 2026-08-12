@@ -9,19 +9,7 @@ import { useMemo } from "react";
 import { TextAttributes } from "@opentui/core";
 import type { ModelMenuRow } from "./types";
 import type { ModelMenuController } from "./use-model-menu";
-
-const C = {
-    bg: "#13131A",
-    overlay0: "#2A2A3A",
-    subtitle: "#6B6B7B",
-    text: "#CDD6F4",
-    blue: "#89B4FA",
-    green: "#A6E3A1",
-    yellow: "#F9E2AF",
-    peach: "#FAB387",
-    red: "#F38BA8",
-    dim: "#4A4A5A",
-};
+import { C, G } from "../theme";
 
 type DisplayRow =
     | { kind: "header"; label: string }
@@ -49,22 +37,23 @@ function ModelRowView({ row, isActive, isFav, selected, onFav }: {
 
     return (
         <box flexDirection="row" paddingX={1} height={1} overflow="hidden"
-            backgroundColor={selected ? C.blue : undefined}
+            backgroundColor={selected ? C.accent : undefined}
             onMouseDown={() => onFav(row.key)}
         >
             <text attributes={selected ? TextAttributes.BOLD : undefined}
-                fg={selected ? "#0D0D12" : isActive ? C.green : row.authOk ? C.text : C.dim}>
-                {isActive ? "✓ " : "  "}
+                fg={selected ? C.onAccent : isActive ? C.success : row.authOk ? C.text : C.faint}
+                wrapMode="none">
+                {isActive ? `${G.ok} ` : "  "}
                 {row.modelId}
             </text>
-            <text attributes={TextAttributes.DIM} fg={selected ? "#0D0D12" : C.subtitle}>
+            <text attributes={TextAttributes.DIM} fg={selected ? C.onAccent : C.muted} wrapMode="none">
                 {" · "}{row.providerName}{badgeText}
                 {!row.authOk ? " · 🔒 no key" : ""}
             </text>
-            <text attributes={TextAttributes.DIM} fg={selected ? "#0D0D12" : C.overlay0}>
+            <text attributes={TextAttributes.DIM} fg={selected ? C.onAccent : C.faint} wrapMode="none">
                 {" · "}{fmtCtx(row.contextWindow)}
             </text>
-            <text fg={selected ? "#0D0D12" : C.yellow}>
+            <text fg={selected ? C.onAccent : C.warn} wrapMode="none">
                 {isFav ? " ⭐" : ""}
             </text>
         </box>
@@ -112,73 +101,81 @@ export function ModelMenu({ menu, activeKey, onSelect }: {
             : "All";
 
     return (
-        <box
-            border={true}
-            borderStyle="rounded"
-            borderColor={C.blue}
-            backgroundColor={C.bg}
-            paddingX={1}
-            flexDirection="column"
-        >
-            {/* Header */}
-            <box paddingX={1} flexDirection="row" gap={1} alignItems="center">
-                <text attributes={TextAttributes.BOLD} fg={C.blue}>Models</text>
-                <text attributes={TextAttributes.DIM} fg={C.subtitle}>
-                    · type to filter · Tab: provider ({filterLabel}) · ^F: favorite
-                </text>
-            </box>
-
-            {/* Search query */}
-            <box paddingX={1} paddingTop={1}>
-                <text fg={C.yellow} attributes={TextAttributes.BOLD}>▸</text>
-                <text fg={C.text}>{menu.query ? " " + menu.query : "  search…"}</text>
-            </box>
-
-            {/* List */}
-            <box paddingX={1} flexDirection="column">
-                {visible.map((d, i) =>
-                    d.kind === "header" ? (
-                        <text key={`h${i}`} attributes={TextAttributes.DIM} fg={C.dim} wrapMode="none">
-                            {"  "}— {d.label} —
-                        </text>
-                    ) : (
-                        <ModelRowView
-                            key={d.row.key}
-                            row={d.row}
-                            isActive={d.isActive}
-                            isFav={d.isFav}
-                            selected={d.row.key === selectedRow?.key}
-                            onFav={menu.toggleFav}
-                        />
-                    )
-                )}
-                {filtered.length === 0 && recents.length === 0 && (
-                    <text attributes={TextAttributes.DIM} fg={C.subtitle} paddingX={1}>
-                        no matching models
-                    </text>
-                )}
-            </box>
-
-            {/* Footer: selected model info */}
-            {selectedRow && (
-                <box
-                    paddingX={1}
-                    paddingTop={1}
-                    marginTop={1}
-                    border={["top"]}
-                    borderColor={C.overlay0}
-                    flexDirection="row"
-                    gap={1}
-                >
-                    <text attributes={TextAttributes.BOLD} fg={C.green}>{selectedRow.modelId}</text>
-                    <text attributes={TextAttributes.DIM} fg={C.subtitle} wrapMode="word">
-                        {selectedRow.providerName} · {fmtCtx(selectedRow.contextWindow)} ctx
-                        {selectedRow.reasoning ? " · reasoning" : ""}
-                        {selectedRow.vision ? " · vision" : ""}
-                        {selectedRow.authOk ? "" : " · no key configured"}
+        <box paddingX={1} flexDirection="column">
+            <box
+                border={true}
+                borderStyle="rounded"
+                borderColor={C.line}
+                backgroundColor={C.panel}
+                paddingX={1}
+                flexDirection="column"
+            >
+                {/* Header */}
+                <box paddingX={1} flexDirection="row" gap={1} alignItems="center">
+                    <text attributes={TextAttributes.BOLD} fg={C.accent} wrapMode="none">Models</text>
+                    <text attributes={TextAttributes.DIM} fg={C.faint} wrapMode="none" truncate>
+                        · type to filter · tab provider ({filterLabel}) · ^f favorite
                     </text>
                 </box>
-            )}
+
+                {/* Search query */}
+                <box paddingX={1} paddingTop={1} flexDirection="row" gap={1}>
+                    <text fg={C.accent2} attributes={TextAttributes.BOLD} wrapMode="none">{G.pointer}</text>
+                    <text fg={menu.query ? C.bright : C.faint} wrapMode="none" truncate>
+                        {menu.query || "search…"}
+                    </text>
+                </box>
+
+                {/* List */}
+                <box paddingX={1} flexDirection="column">
+                    {visible.map((d, i) =>
+                        d.kind === "header" ? (
+                            // Three spaces, not two: the rows below carry a column
+                            // of padding plus a two-cell ✓ slot, so the group label
+                            // only lines up with the model names at this indent.
+                            <text key={`h${i}`} attributes={TextAttributes.DIM} fg={C.faint} wrapMode="none">
+                                {"   "}{d.label}
+                            </text>
+                        ) : (
+                            <ModelRowView
+                                key={d.row.key}
+                                row={d.row}
+                                isActive={d.isActive}
+                                isFav={d.isFav}
+                                selected={d.row.key === selectedRow?.key}
+                                onFav={menu.toggleFav}
+                            />
+                        )
+                    )}
+                    {filtered.length === 0 && recents.length === 0 && (
+                        <text attributes={TextAttributes.DIM} fg={C.muted} paddingX={1}>
+                            no matching models
+                        </text>
+                    )}
+                </box>
+
+                {/* Footer: selected model info */}
+                {selectedRow && (
+                    <box
+                        paddingX={1}
+                        marginTop={1}
+                        border={["top"]}
+                        borderColor={C.line}
+                        flexDirection="row"
+                        gap={1}
+                    >
+                        <text attributes={TextAttributes.BOLD} fg={C.success} wrapMode="none" truncate>
+                            {selectedRow.modelId}
+                        </text>
+                        <text attributes={TextAttributes.DIM} fg={C.muted} wrapMode="word">
+                            · {selectedRow.providerName} · {fmtCtx(selectedRow.contextWindow)} ctx
+                            {selectedRow.reasoning ? " · reasoning" : ""}
+                            {selectedRow.vision ? " · vision" : ""}
+                            {selectedRow.authOk ? "" : " · no key configured"}
+                        </text>
+                    </box>
+                )}
+            </box>
         </box>
     );
 }

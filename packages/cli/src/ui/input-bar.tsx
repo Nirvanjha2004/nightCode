@@ -10,18 +10,7 @@ import { ModelMenu } from "./model-menu";
 import { useModelMenu } from "./model-menu/use-model-menu";
 import type { ModelMenuData } from "./model-menu/types";
 import { logger } from "../logger";
-
-const C = {
-    bg:       "#0D0D12",
-    surface0: "#13131A",
-    surface1: "#1A1A24",
-    surface2: "#222233",
-    overlay0: "#2A2A3A",
-    subtitle: "#6B6B7B",
-    text:     "#CDD6F4",
-    blue:     "#89B4FA",
-    green:    "#A6E3A1",
-};
+import { C, G } from "./theme";
 
 export type ModelMenuProps = {
     /** Build the provider/model list (fresh on each menu open). */
@@ -230,7 +219,10 @@ export function InputBar({ onSubmit, disabled = false, model, cwd, status, sessi
     });
 
     return (
-        <box flexDirection="column">
+        // flexShrink={0}: on a short terminal the transcript scrolls, but the
+        // composer and its footer must never be clipped — they are how you drive
+        // the app and how you read its state.
+        <box flexDirection="column" flexShrink={0}>
             {/* Model selector dropdown */}
             {menu.isOpen && modelMenu && (
                 <ModelMenu
@@ -242,71 +234,93 @@ export function InputBar({ onSubmit, disabled = false, model, cwd, status, sessi
 
             {/* Command menu dropdown */}
             {cmd.isOpen && (
-                <box
-                    border={true}
-                    borderStyle="rounded"
-                    borderColor={C.blue}
-                    backgroundColor={C.surface0}
-                    paddingX={1}
-                    flexDirection="column"
-                >
-                    <box paddingX={1}>
-                        <text attributes={TextAttributes.BOLD} fg={C.blue}>
-                            Commands
-                        </text>
-                        <text attributes={TextAttributes.DIM} fg={C.subtitle}>
-                            {" "}· type to filter
-                        </text>
+                <box paddingX={1} flexDirection="column">
+                    <box
+                        border={true}
+                        borderStyle="rounded"
+                        borderColor={C.line}
+                        backgroundColor={C.panel}
+                        paddingX={1}
+                        flexDirection="column"
+                    >
+                        <box paddingX={1} flexDirection="row" gap={1}>
+                            <text attributes={TextAttributes.BOLD} fg={C.accent} wrapMode="none">
+                                Commands
+                            </text>
+                            <text attributes={TextAttributes.DIM} fg={C.faint} wrapMode="none" truncate>
+                                · type to filter · ↑↓ move · ⏎ insert
+                            </text>
+                        </box>
+
+                        <CommandMenu
+                            query={cmd.query}
+                            commands={commands}
+                            selectedIndex={cmd.selectedIndex}
+                            scrollRef={scrollRef}
+                            onSelect={(index) => cmd.selectAt(index)}
+                            onExecute={(index) => cmd.selectAt(index)}
+                        />
+
+                        {(() => {
+                            const command = cmd.filtered[cmd.selectedIndex];
+                            return command ? (
+                                <box
+                                    paddingX={1}
+                                    marginTop={1}
+                                    border={["top"]}
+                                    borderColor={C.line}
+                                >
+                                    <text attributes={TextAttributes.DIM} fg={C.muted} wrapMode="word">
+                                        {command.description}
+                                    </text>
+                                </box>
+                            ) : null;
+                        })()}
                     </box>
-
-                    <CommandMenu
-                        query={cmd.query}
-                        commands={commands}
-                        selectedIndex={cmd.selectedIndex}
-                        scrollRef={scrollRef}
-                        onSelect={(index) => cmd.selectAt(index)}
-                        onExecute={(index) => cmd.selectAt(index)}
-                    />
-
-                    {(() => {
-                        const command = cmd.filtered[cmd.selectedIndex];
-                        return command ? (
-                            <box
-                                paddingX={1}
-                                paddingTop={1}
-                                marginTop={1}
-                                border={["top"]}
-                                borderColor={C.overlay0}
-                            >
-                                <text attributes={TextAttributes.DIM} fg={C.subtitle}>
-                                    {command.description}
-                                </text>
-                            </box>
-                        ) : null;
-                    })()}
                 </box>
             )}
 
-            {/* Input area */}
-            <box
-                paddingX={2}
-                paddingY={1}
-                backgroundColor={disabled ? C.surface0 : C.surface1}
-                flexDirection="column"
-                gap={1}
-            >
-                <textarea
-                    ref={textareaRef}
-                    focused={!disabled}
-                    onContentChange={handleContentChange}
-                    placeholder={
-                        disabled
-                            ? "Agent is thinking..."
-                            : "Ask anything... (Shift+Enter for newline, Ctrl+M for models)"
-                    }
-                />
+            {/* ── Composer ─────────────────────────────────────────────
+                A rounded box IS the boundary between transcript and input —
+                no separate divider rule above it. The border carries the focus
+                state: accent while the agent is idle and waiting on you, faint
+                while a run owns the turn. */}
+            <box paddingX={1} paddingTop={1} flexDirection="column">
+                <box
+                    border={true}
+                    borderStyle="rounded"
+                    borderColor={disabled ? C.line : C.accent}
+                    backgroundColor={C.panel}
+                    paddingX={1}
+                    flexDirection="row"
+                    gap={1}
+                    alignItems="flex-start"
+                >
+                    <text
+                        attributes={TextAttributes.BOLD}
+                        fg={disabled ? C.faint : C.accent}
+                        wrapMode="none"
+                        flexShrink={0}
+                    >
+                        {G.caret}
+                    </text>
+                    <box flexGrow={1} flexDirection="column">
+                        <textarea
+                            ref={textareaRef}
+                            focused={!disabled}
+                            onContentChange={handleContentChange}
+                            // Short on purpose: a placeholder long enough to wrap
+                            // steals transcript rows on a narrow terminal. The
+                            // shortcuts live in the welcome screen and the `/` menu.
+                            placeholder={disabled ? "working…" : "Ask anything…"}
+                        />
+                    </box>
+                </box>
 
-                <StatusBar model={model} cwd={cwd} status={status} sessionNumber={sessionNumber} />
+                {/* Footer: the quiet line. Everything here is reference, not action. */}
+                <box paddingX={1}>
+                    <StatusBar model={model} cwd={cwd} status={status} sessionNumber={sessionNumber} />
+                </box>
             </box>
         </box>
     );

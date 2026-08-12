@@ -1,8 +1,8 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { Header } from "./header";
 import { InputBar } from "./input-bar";
 import { TextAttributes } from "@opentui/core";
-import { useKeyboard, useRenderer } from "@opentui/react";
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import "../telemetry";
 import type { AgentLoop } from "../agent/loop";
@@ -11,13 +11,25 @@ import type { Command } from "./commands-menu/types";
 import type { AgentStatus } from "./status-bar";
 import type { ModelMenuData } from "./model-menu/types";
 import { logger } from "../logger";
-import { MarkdownContent, type MdPalette } from "./markdown";
+import { MarkdownContent } from "./markdown";
+import { C, G, SPINNER, SPINNER_MS, SPINNER_START } from "./theme";
+
 // Display-only — agent context lives in backend MessageManager, not here
 type DisplayMessage = {
     id: string;
     role: "user" | "assistant" | "error";
     content: string;
 };
+
+/**
+ * One entry in the transcript. Messages and agent events share a single ordered
+ * list so a run reads as a story top-to-bottom — prompt, then the tools it took
+ * to answer it, then the answer — instead of the tool log piling up in its own
+ * region at the bottom of the screen, detached from the turn that produced it.
+ */
+type TimelineItem =
+    | { kind: "msg"; id: string; msg: DisplayMessage }
+    | { kind: "event"; id: string; event: AgentEvent; args?: string };
 
 type Props = {
     sessionId: string;
@@ -37,41 +49,71 @@ type Props = {
     onSwitchModel?: (providerId: string, modelId: string) => { providerId: string; modelId: string };
 };
 
-// ── Color palette (Catppuccin Mocha inspired) ─────────────────────────────────
-const C = {
-    bg: "#0D0D12",
-    surface0: "#13131A",
-    surface1: "#1A1A24",
-    surface2: "#222233",
-    overlay0: "#2A2A3A",
-    overlay1: "#3A3A4A",
-    subtitle: "#6B6B7B",
-    text: "#CDD6F4",
-    blue: "#89B4FA",
-    green: "#A6E3A1",
-    red: "#F38BA8",
-    yellow: "#F9E2AF",
-    mauve: "#CBA6F7",
-    peach: "#FAB387",
-    teal: "#94E2D5",
-};
+// ── Text helpers ───────────────────────────────────────────────────────────────
 
-// ── Markdown palette for assistant replies (shared with markdown.tsx) ──────────
-const MD_PALETTE: MdPalette = {
-    text: C.text,
-    blue: C.blue,
-    teal: C.teal,
-    peach: C.peach,
-    surface1: C.surface1,
-    surface2: C.surface2,
-};
+/** Flatten to one line and cap the length — for args shown beside a tool name. */
+function oneLine(s: string, max: number): string {
+    const flat = s.replace(/\s+/g, " ").trim();
+    return flat.length <= max ? flat : `${flat.slice(0, Math.max(0, max - 1))}…`;
+}
 
-// ── Role label config ─────────────────────────────────────────────────────────
-const ROLE_CONFIG: Record<DisplayMessage["role"], { label: string; fg: string; bg: string; border: string }> = {
-    user: { label: "You", fg: C.blue, bg: "#15152A", border: C.blue },
-    assistant: { label: "NightCode", fg: C.green, bg: "#15251A", border: C.green },
-    error: { label: "Error", fg: C.red, bg: "#2A1515", border: C.red },
-};
+/**
+ * Tool output shown under a call. Capped at a few lines with a "+N lines" tail so
+ * a chatty tool (a diff, a directory listing) stays a glanceable summary instead
+ * of burying the answer that follows it — the full result still reaches the model.
+ */
+const PREVIEW_LINES = 3;
+const PREVIEW_LINE_CHARS = 200;
+
+function preview(s: string): { lines: string[]; extra: number } {
+    const all = (s ?? "")
+        .replace(/\r\n/g, "\n")
+        .split("\n")
+        .filter((l) => l.trim().length > 0);
+    const lines = all
+        .slice(0, PREVIEW_LINES)
+        .map((l) => (l.length > PREVIEW_LINE_CHARS ? `${l.slice(0, PREVIEW_LINE_CHARS - 1)}…` : l));
+    return { lines, extra: Math.max(0, all.length - PREVIEW_LINES) };
+}
+
+// ── Layout primitive ───────────────────────────────────────────────────────────
+// Every transcript row is a one-column gutter holding a mark, then the content.
+// Sharing it is what makes prompts, tool calls, results and the spinner line up
+// down a single spine instead of each drifting to its own indentation.
+function Row({
+    mark,
+    markFg,
+    nested = false,
+    marginBottom = 0,
+    children,
+}: {
+    mark: string;
+    markFg: string;
+    /** Shift one gutter to the right — used to hang a result under its call. */
+    nested?: boolean;
+    marginBottom?: number;
+    children: ReactNode;
+}) {
+    return (
+        <box
+            flexDirection="row"
+            gap={1}
+            paddingX={1}
+            marginBottom={marginBottom}
+            alignItems="flex-start"
+        >
+            {nested && <box flexShrink={0} width={1} />}
+            <box flexShrink={0} width={1}>
+                <text fg={markFg} wrapMode="none">
+                    {mark}
+                </text>
+            </box>
+            <box flexGrow={1} flexDirection="column">
+                {children}
+            </box>
+        </box>
+    );
+}
 
 // ── Confirmation dialog ────────────────────────────────────────────────────────
 type PendingConfirm = {
@@ -81,76 +123,90 @@ type PendingConfirm = {
     args: Record<string, unknown>;
 };
 
+const CONFIRM_CHOICES: Array<[key: string, label: string, fg: string]> = [
+    ["y", "run it", C.success],
+    ["n", "skip it", C.danger],
+    ["esc", "same as n", C.faint],
+];
+
 function ConfirmDialog({ pending }: { pending: PendingConfirm }) {
     const argsStr = JSON.stringify(pending.args).slice(0, 200);
 
     return (
-        <box paddingX={2} paddingY={1} flexDirection="column">
+        <box paddingX={1} paddingTop={1} flexDirection="column" flexShrink={0}>
             <box
                 border={true}
                 borderStyle="rounded"
                 borderColor={C.peach}
-                backgroundColor="#1A1A15"
-                padding={1}
+                backgroundColor={C.panel}
+                paddingX={1}
                 flexDirection="column"
-                gap={1}
             >
                 {/* Header */}
                 <box flexDirection="row" gap={1} alignItems="center">
-                    <text fg={C.peach}>⚠</text>
-                    <text attributes={TextAttributes.BOLD} fg={C.peach}>
-                        Destructive Action
+                    <text fg={C.peach} wrapMode="none">{G.warn}</text>
+                    <text attributes={TextAttributes.BOLD} fg={C.peach} wrapMode="none" truncate>
+                        Destructive action
                     </text>
                 </box>
 
-                {/* Tool info — use a single text element with interpolated string.
-                    wrapMode="word" keeps long args previews readable (wrapped) on
-                    narrow terminals instead of clipping mid-line. */}
-                <box paddingX={1}>
+                {/* What is about to run. wrapMode="word" keeps a long args preview
+                    readable (wrapped) on narrow terminals instead of clipping. */}
+                <box paddingTop={1}>
                     <text fg={C.text} wrapMode="word">
                         {pending.toolName}({argsStr})
                     </text>
                 </box>
 
-                {/* Instructions */}
-                <box paddingX={1} flexDirection="row" gap={1}>
-                    <text fg={C.green} attributes={TextAttributes.BOLD}>[Y]</text>
-                    <text fg={C.subtitle}>Confirm and execute</text>
-                </box>
-                <box paddingX={1} flexDirection="row" gap={1}>
-                    <text fg={C.red} attributes={TextAttributes.BOLD}>[N]</text>
-                    <text fg={C.subtitle}>Cancel this operation</text>
-                </box>
-                <box paddingX={1} flexDirection="row" gap={1}>
-                    <text fg={C.overlay1} attributes={TextAttributes.DIM}>[Esc]</text>
-                    <text fg={C.subtitle}>Cancel operation (same as N)</text>
+                {/* Choices — the affirmative one first, each keyed by its letter.
+                    The key column is fixed-width so the labels line up: `esc` is
+                    three characters and `y` is one, and a ragged left edge here
+                    reads as three unrelated notes rather than one menu. */}
+                <box paddingTop={1} flexDirection="column">
+                    {CONFIRM_CHOICES.map(([key, label, fg]) => (
+                        <box key={key} flexDirection="row" gap={1}>
+                            <box flexShrink={0} width={3}>
+                                <text fg={fg} attributes={TextAttributes.BOLD} wrapMode="none">
+                                    {key}
+                                </text>
+                            </box>
+                            <text fg={C.muted} wrapMode="none" truncate>
+                                {label}
+                            </text>
+                        </box>
+                    ))}
                 </box>
             </box>
         </box>
     );
 }
 
-// ── Simple animated dots component ────────────────────────────────────────────
-function ThinkingIndicator() {
-    const [dots, setDots] = useState("");
+// ── Progress indicator ─────────────────────────────────────────────────────────
+// Verbs rotate slowly so a long run feels like it is getting somewhere; the
+// elapsed counter is the honest signal underneath it, and the interrupt hint
+// appears whenever there is room for it.
+const VERBS = ["Thinking", "Reasoning", "Working", "Pondering", "Untangling", "Wrangling"];
+const HINT_MIN_WIDTH = 52;
 
-    useEffect(() => {
-        const t = setInterval(() => {
-            setDots((d) => (d.length >= 3 ? "" : d + "."));
-        }, 400);
-        return () => clearInterval(t);
-    }, []);
+function ThinkingIndicator({ tick, elapsed }: { tick: number; elapsed: number }) {
+    const { width } = useTerminalDimensions();
+    const verb = VERBS[Math.floor(elapsed / 6) % VERBS.length]!;
+    // "0s" is a number that has not said anything yet — the clock only earns a
+    // place on the row once it has something to report.
+    const hint = width >= HINT_MIN_WIDTH ? "esc to interrupt" : "";
+    const meta = [elapsed > 0 ? `${elapsed}s` : "", hint].filter(Boolean).join(" · ");
 
     return (
-        <box flexDirection="row" gap={1}>
-            <text fg={C.yellow} attributes={TextAttributes.DIM}>
-                Thinking{dots}
+        <Row mark={SPINNER[tick % SPINNER.length]!} markFg={C.accent2} marginBottom={1}>
+            <text fg={C.muted} wrapMode="none" truncate>
+                {verb}…{" "}
+                <span fg={C.faint}>{meta ? `(${meta})` : ""}</span>
             </text>
-        </box>
+        </Row>
     );
 }
 
-// ── Agent activity feed — shows what the loop is doing (Issue #1) ─────────────
+// ── Agent activity feed ────────────────────────────────────────────────────────
 const STAGE_LABELS: Record<string, string> = {
     memory: "loading memory",
     extract: "saving memories",
@@ -160,96 +216,174 @@ const STAGE_LABELS: Record<string, string> = {
 // old Ctrl+C-exits-everything behavior without killing the process mid-run.
 const CANCEL_TO_EXIT_MS = 2000;
 
-function StageRow({ name }: { name: string }) {
+/** A background step the loop took — deliberately quiet. */
+function NoteRow({ label }: { label: string }) {
     return (
-        <text fg={C.overlay1} attributes={TextAttributes.DIM}>
-            · {STAGE_LABELS[name] ?? name}
-        </text>
-    );
-}
-
-function IterationRow({ n, max }: { n: number; max: number }) {
-    return (
-        <text fg={C.overlay1} attributes={TextAttributes.DIM}>
-            · iter {n}/{max}
-        </text>
-    );
-}
-
-function ToolEndRow({ event }: { event: Extract<AgentEvent, { type: "tool_end" }> }) {
-    return (
-        <box flexDirection="column">
-            <text fg={event.ok ? C.green : C.red} attributes={event.ok ? undefined : TextAttributes.BOLD}>
-                {event.ok ? "✓" : "✗"} {event.toolName} · {(event.durationMs / 1000).toFixed(1)}s
+        <Row mark="·" markFg={C.faint}>
+            <text fg={C.faint} attributes={TextAttributes.DIM} wrapMode="word">
+                {label}
             </text>
-            {event.resultPreview && (
-                <text fg={C.subtitle} attributes={TextAttributes.DIM} wrapMode="word">
-                    {event.resultPreview}
+        </Row>
+    );
+}
+
+/** A finished tool call plus its result, drawn as a call → result branch. */
+function ToolEndRow({ event, args }: { event: Extract<AgentEvent, { type: "tool_end" }>; args?: string }) {
+    const { lines, extra } = preview(event.resultPreview);
+    const hasResult = lines.length > 0;
+
+    return (
+        <box flexDirection="column" marginBottom={1}>
+            <Row mark={G.dot} markFg={event.ok ? C.success : C.danger}>
+                <text fg={C.text} wrapMode="word">
+                    {event.toolName}
+                    <span fg={C.muted}>{args ? `(${args})` : ""}</span>
+                    <span fg={C.faint}>{"  "}{(event.durationMs / 1000).toFixed(1)}s</span>
                 </text>
+            </Row>
+            {hasResult && (
+                <Row mark={G.branch} markFg={C.faint} nested>
+                    {lines.map((l, i) => (
+                        <text key={i} fg={C.muted} attributes={TextAttributes.DIM} wrapMode="word">
+                            {l}
+                        </text>
+                    ))}
+                    {extra > 0 && (
+                        <text fg={C.faint} attributes={TextAttributes.DIM} wrapMode="none">
+                            … +{extra} lines
+                        </text>
+                    )}
+                </Row>
             )}
         </box>
     );
 }
 
-// ── Message bubble component ───────────────────────────────────────────────────
+/** The tool currently running — same shape as a finished one, with a live clock. */
+function LiveToolRow({
+    tool,
+    elapsed,
+    tick,
+}: {
+    tool: { toolName: string; argsPreview: string };
+    elapsed: number;
+    tick: number;
+}) {
+    return (
+        <Row mark={SPINNER[tick % SPINNER.length]!} markFg={C.warn} marginBottom={1}>
+            <text fg={C.text} wrapMode="word">
+                {tool.toolName}
+                <span fg={C.muted}>{tool.argsPreview ? `(${oneLine(tool.argsPreview, 64)})` : ""}</span>
+                <span fg={C.faint}>{elapsed > 0 ? `  ${elapsed}s` : ""}</span>
+            </text>
+        </Row>
+    );
+}
+
+function TimelineRow({ item }: { item: TimelineItem }) {
+    if (item.kind === "msg") return <MessageBubble msg={item.msg} />;
+
+    const { event } = item;
+    if (event.type === "stage") return <NoteRow label={STAGE_LABELS[event.name] ?? event.name} />;
+    if (event.type === "iteration") return <NoteRow label={`step ${event.n} of ${event.max}`} />;
+    if (event.type === "tool_end") return <ToolEndRow event={event} args={item.args} />;
+    if (event.type === "cancelled") {
+        return (
+            <Row mark={G.warn} markFg={C.warn} marginBottom={1}>
+                <text fg={C.warn} attributes={TextAttributes.BOLD} wrapMode="word">
+                    Cancelled
+                </text>
+            </Row>
+        );
+    }
+    return null;
+}
+
+// ── Message ────────────────────────────────────────────────────────────────────
+// Flat rows, no bubbles: a chat frame around every turn spends four columns and
+// two rows of chrome per message to encode one bit — who is speaking — that a
+// single colored mark already carries. Dropping it leaves the terminal's real
+// content (code, diffs, tool output) the full width it wants.
+const ROLE_CONFIG: Record<DisplayMessage["role"], { mark: string; markFg: string; textFg: string }> = {
+    user:      { mark: G.quote, markFg: C.faint,   textFg: C.muted },
+    assistant: { mark: G.dot,   markFg: C.accent2, textFg: C.text },
+    error:     { mark: G.fail,  markFg: C.danger,  textFg: C.danger },
+};
+
 export function MessageBubble({ msg }: { msg: DisplayMessage }) {
     const cfg = ROLE_CONFIG[msg.role];
-    const isUser = msg.role === "user";
 
     return (
-        <box
-            flexDirection="column"
-            alignItems={isUser ? "flex-end" : "flex-start"}
-            paddingX={2}
-        >
-            {/* Role label chip */}
-            <box
-                border={true}
-                borderStyle="rounded"
-                borderColor={cfg.border}
-                backgroundColor={cfg.bg}
-                maxWidth="80%"
-                flexDirection="column"
-            >
-                {/* Header row: label + time placeholder */}
-                <box
-                    paddingX={1}
-                    paddingTop={1}
-                    flexDirection="row"
-                    gap={1}
-                    alignItems="center"
-                >
-                    <text
-                        attributes={TextAttributes.BOLD}
-                        fg={cfg.fg}
-                    >
-                        {cfg.label}
-                    </text>
-                    <text
-                        attributes={TextAttributes.DIM}
-                        fg={C.subtitle}
-                    >
-                        •
-                    </text>
-                    <text
-                        attributes={TextAttributes.DIM}
-                        fg={C.overlay1}
-                    >
-                        just now
-                    </text>
-                </box>
+        <Row mark={cfg.mark} markFg={cfg.markFg} marginBottom={1}>
+            {msg.role === "assistant" ? (
+                <MarkdownContent content={msg.content} />
+            ) : (
+                <text fg={cfg.textFg} wrapMode="word">
+                    {msg.content}
+                </text>
+            )}
+        </Row>
+    );
+}
 
-                {/* Message content — assistant replies render as markdown */}
-                <box paddingX={1} paddingY={1}>
-                    {msg.role === "assistant" ? (
-                        <MarkdownContent content={msg.content} palette={MD_PALETTE} />
-                    ) : (
-                        <text fg={C.text} wrapMode="word">
-                            {msg.content}
-                        </text>
-                    )}
+// ── Welcome ────────────────────────────────────────────────────────────────────
+// Seen once per session and then scrolled away, so it can afford the full
+// wordmark — but only where it fits. Below the art threshold it degrades to a
+// one-line brand rather than a clipped ASCII smear.
+const ART_MIN_WIDTH = 62;
+const TIPS_MIN_WIDTH = 64;
+
+const TIPS: Array<[string, string]> = [
+    ["/", "commands"],
+    ["^m", "switch model"],
+    ["esc", "interrupt"],
+    ["^c^c", "exit"],
+];
+
+function Welcome({ notice }: { notice: string | null }) {
+    const { width } = useTerminalDimensions();
+
+    return (
+        <box flexDirection="column" alignItems="center" paddingX={1} paddingY={2} gap={1}>
+            {width >= ART_MIN_WIDTH ? (
+                <box flexDirection="row" gap={0.5} alignItems="center">
+                    <ascii-font font="tiny" text="Night" color={C.accent} />
+                    <ascii-font font="tiny" text="Code" color={C.accent2} />
                 </box>
-            </box>
+            ) : (
+                <text attributes={TextAttributes.BOLD} fg={C.accent} wrapMode="none">
+                    {G.spark} NightCode {G.spark}
+                </text>
+            )}
+
+            <text fg={C.muted} attributes={TextAttributes.DIM} wrapMode="none" truncate>
+                your terminal-native coding agent
+            </text>
+
+            {notice ? (
+                <text fg={C.success} attributes={TextAttributes.BOLD} wrapMode="none" truncate>
+                    {notice}
+                </text>
+            ) : (
+                <text fg={C.faint} attributes={TextAttributes.DIM} wrapMode="none" truncate>
+                    ask anything to get started
+                </text>
+            )}
+
+            {width >= TIPS_MIN_WIDTH && (
+                <box flexDirection="row" gap={2} alignItems="center">
+                    {TIPS.map(([key, label]) => (
+                        <box key={key} flexDirection="row" gap={1} alignItems="center">
+                            <text fg={C.accent} attributes={TextAttributes.BOLD} wrapMode="none">
+                                {key}
+                            </text>
+                            <text fg={C.faint} attributes={TextAttributes.DIM} wrapMode="none">
+                                {label}
+                            </text>
+                        </box>
+                    ))}
+                </box>
+            )}
         </box>
     );
 }
@@ -269,7 +403,7 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
     const [providerId, setProviderId] = useState(initialProviderId ?? "");
     // One-shot transition notice shown in the empty state after /clear.
     const [notice, setNotice] = useState<string | null>(null);
-    const [messages, setMessages] = useState<DisplayMessage[]>([]);
+    const [timeline, setTimeline] = useState<TimelineItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState<AgentStatus>("ready");
     const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
@@ -282,12 +416,19 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
     const renderer = useRenderer();
     const scrollRef = useRef<ScrollBoxRenderable | null>(null);
 
-    const push = (role: DisplayMessage["role"], content: string) => {
-        setMessages((prev) => [
-            ...prev,
-            { id: crypto.randomUUID(), role, content },
-        ]);
-    };
+    // Stable across renders — handleAgentEvent captures it once.
+    const pushItem = useCallback(
+        (item: TimelineItem) => setTimeline((prev) => [...prev, item]),
+        []
+    );
+
+    const push = useCallback(
+        (role: DisplayMessage["role"], content: string) => {
+            const id = crypto.randomUUID();
+            pushItem({ kind: "msg", id, msg: { id, role, content } });
+        },
+        [pushItem]
+    );
 
     // ── Scroll following ─────────────────────────────────────────────
     // The scrollbox's stickyScroll handles follow-bottom natively (it stops
@@ -306,7 +447,6 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
     }, [loading]);
 
     // ── Agent activity feed ──────────────────────────────────────────
-    const [activity, setActivity] = useState<AgentEvent[]>([]);
     const [liveTool, setLiveTool] = useState<{ toolName: string; argsPreview: string; startedAt: number } | null>(null);
     const [liveElapsed, setLiveElapsed] = useState(0);
     // Live assistant reply — appended as text_delta events arrive (Pi-style
@@ -316,6 +456,30 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
     // Live reasoning/thinking text — appended as reasoning_delta events arrive,
     // shown in a dimmed panel while the model works, discarded on completion.
     const [reasoning, setReasoning] = useState("");
+    // Animation clock and run clock. Both only run while a turn is in flight, so
+    // an idle NightCode repaints nothing at all.
+    const [tick, setTick] = useState(SPINNER_START);
+    const [runElapsed, setRunElapsed] = useState(0);
+    // tool_end carries no arguments, so the preview from its tool_start is held
+    // here and reattached when the call finishes — a tool call reads as
+    // `name(args)` in the transcript the same way you would write it.
+    const toolArgsRef = useRef<Record<string, string>>({});
+
+    useEffect(() => {
+        if (!loading) return;
+        const t = setInterval(() => setTick((v) => v + 1), SPINNER_MS);
+        return () => clearInterval(t);
+    }, [loading]);
+
+    useEffect(() => {
+        if (!loading) {
+            setRunElapsed(0);
+            return;
+        }
+        const startedAt = Date.now();
+        const t = setInterval(() => setRunElapsed(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+        return () => clearInterval(t);
+    }, [loading]);
 
     // Tick the live tool row's elapsed counter once a second.
     useEffect(() => {
@@ -328,18 +492,27 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
     // row (tools run sequentially, so at most one is live); tool_end finalizes it.
     const handleAgentEvent = useCallback((event: AgentEvent) => {
         if (event.type === "tool_start") {
+            toolArgsRef.current[event.toolName] = event.argsPreview;
             setLiveTool({ toolName: event.toolName, argsPreview: event.argsPreview, startedAt: Date.now() });
+            setLiveElapsed(0);
             return;
         }
         if (event.type === "tool_end") {
+            const args = toolArgsRef.current[event.toolName];
+            delete toolArgsRef.current[event.toolName];
             setLiveTool(null);
-            setActivity((prev) => [...prev, event]);
+            pushItem({
+                kind: "event",
+                id: crypto.randomUUID(),
+                event,
+                args: args ? oneLine(args, 64) : undefined,
+            });
             return;
         }
         if (event.type === "cancelled") {
             // A cancelled run may have left a ghost live-tool row — clear it.
             setLiveTool(null);
-            setActivity((prev) => [...prev, event]);
+            pushItem({ kind: "event", id: crypto.randomUUID(), event });
             return;
         }
         if (event.type === "reasoning_delta") {
@@ -366,12 +539,12 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
         if (event.type === "iteration") {
             // A new ReAct iteration means a fresh model call — its thinking
             // replaces the previous block instead of concatenating onto it.
-            setActivity((prev) => [...prev, event]);
+            pushItem({ kind: "event", id: crypto.randomUUID(), event });
             setReasoning("");
             return;
         }
-        setActivity((prev) => [...prev, event]);
-    }, []);
+        pushItem({ kind: "event", id: crypto.randomUUID(), event });
+    }, [pushItem]);
 
     // ── Cancellation ────────────────────────────────────────────────────
     // Esc or the first Ctrl+C while a run is active cancels it (the run stays
@@ -492,11 +665,11 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             const next = onResetSession();
             setSessionId(next.sessionId);
             setSessionNumber(next.sessionNumber);
-            setMessages([]);
-            setActivity([]);
+            setTimeline([]);
             setLiveTool(null);
             setStreaming(null);
             setReasoning("");
+            toolArgsRef.current = {};
             setStatus("ready");
             setNotice("Session cleared. Starting a new conversation.");
             logger.info(`[UI] /clear — fresh session: ${next.sessionId} (#${next.sessionNumber})`);
@@ -547,7 +720,7 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             abortRef.current = null;
             setLoading(false);
         }
-    }, [loading, sessionId, agentLoop, buildConfirmHook, handleAgentEvent, onResetSession]);
+    }, [loading, sessionId, agentLoop, buildConfirmHook, handleAgentEvent, onResetSession, push]);
 
     return (
         <box
@@ -556,17 +729,15 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             width="100%"
             height="100%"
         >
-            {/* ── Header ──────────────────────────────────────────────── */}
-            <box
-                paddingX={2}
-                paddingY={1}
-                border={["bottom"]}
-                borderColor={C.overlay0}
-            >
+            {/* ── Header — one row of brand, one of rule ───────────────
+                Explicit height: the bottom border needs a row of its own, and
+                flexShrink={0} keeps the chrome intact on a short terminal —
+                the transcript is what should give up space, never the frame. */}
+            <box height={2} flexShrink={0} paddingX={1} border={["bottom"]} borderColor={C.line}>
                 <Header />
             </box>
 
-            {/* ── Messages area ───────────────────────────────────────── */}
+            {/* ── Transcript ──────────────────────────────────────────── */}
             <scrollbox
                 ref={scrollRef}
                 flexGrow={1}
@@ -578,122 +749,79 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
                 {/* Top padding spacer */}
                 <box height={1} />
 
-                {messages.length === 0 && !loading && (
-                    <box
-                        flexDirection="column"
-                        alignItems="center"
-                        justifyContent="center"
-                        paddingY={4}
-                        gap={1}
-                    >
-                        <text fg={C.subtitle} attributes={TextAttributes.DIM}>
-                            ✦  Welcome to NightCode  ✦
-                        </text>
-                        {notice ? (
-                            <text fg={C.green} attributes={TextAttributes.BOLD}>
-                                {notice}
-                            </text>
-                        ) : (
-                            <text fg={C.overlay1} attributes={TextAttributes.DIM}>
-                                Ask something to get started
-                            </text>
-                        )}
-                    </box>
-                )}
+                {timeline.length === 0 && !loading && <Welcome notice={notice} />}
 
-                {messages.map((msg) => (
-                    <box key={msg.id} marginBottom={1}>
-                        <MessageBubble msg={msg} />
-                    </box>
+                {timeline.map((item) => (
+                    <TimelineRow key={item.id} item={item} />
                 ))}
 
                 {/* Live streaming reply — same slot the final message will land in */}
                 {streaming && (
-                    <box key={streaming.id} marginBottom={1}>
-                        <MessageBubble msg={{ id: streaming.id, role: "assistant", content: streaming.text }} />
-                    </box>
+                    <MessageBubble
+                        key={streaming.id}
+                        msg={{ id: streaming.id, role: "assistant", content: streaming.text }}
+                    />
                 )}
 
-                {activity.length > 0 && (
-                    <box paddingX={2} flexDirection="column" marginBottom={1}>
-                        {activity.map((event, i) => {
-                            if (event.type === "stage") return <StageRow key={i} name={event.name} />;
-                            if (event.type === "iteration") return <IterationRow key={i} n={event.n} max={event.max} />;
-                            if (event.type === "tool_end") return <ToolEndRow key={i} event={event} />;
-                            if (event.type === "cancelled") {
-                                return (
-                                    <text fg={C.yellow} attributes={TextAttributes.BOLD}>
-                                        ⚠ Cancelled
-                                    </text>
-                                );
-                            }
-                            return null;
-                        })}
-                        {liveTool && (
-                            <box flexDirection="row" gap={1}>
-                                <text fg={C.yellow} attributes={TextAttributes.DIM}>
-                                    →
-                                </text>
-                                <text fg={C.yellow} attributes={TextAttributes.DIM} wrapMode="word">
-                                    {liveTool.toolName} {liveTool.argsPreview} · {liveElapsed}s
+                {liveTool && <LiveToolRow tool={liveTool} elapsed={liveElapsed} tick={tick} />}
+
+                {/* Live reasoning panel — the model's thoughts as they happen. Held
+                    behind a rail so it reads as an aside to the answer, not as the
+                    answer itself. */}
+                {reasoning && loading && (
+                    <box flexDirection="column" marginBottom={1}>
+                        <Row mark={SPINNER[tick % SPINNER.length]!} markFg={C.accent2}>
+                            <text fg={C.accent2} attributes={TextAttributes.DIM} wrapMode="none">
+                                thinking
+                            </text>
+                        </Row>
+                        <box flexDirection="row" gap={1} paddingX={1} alignItems="flex-start">
+                            <box flexShrink={0} width={1} />
+                            <box
+                                flexGrow={1}
+                                border={["left"]}
+                                borderColor={C.line}
+                                paddingX={1}
+                                flexDirection="column"
+                            >
+                                <text fg={C.faint} attributes={TextAttributes.DIM} wrapMode="word">
+                                    {reasoning}
                                 </text>
                             </box>
-                        )}
-                    </box>
-                )}
-
-                {/* Live reasoning/thinking panel — the model's thoughts as they happen */}
-                {reasoning && loading && (
-                    <box paddingX={2} flexDirection="column" marginBottom={1}>
-                        <text fg={C.mauve} attributes={TextAttributes.DIM}>
-                            💭 thinking
-                        </text>
-                        <text fg={C.subtitle} attributes={TextAttributes.DIM} wrapMode="word">
-                            {reasoning}
-                        </text>
+                        </box>
                     </box>
                 )}
 
                 {loading && !liveTool && !streaming && !reasoning && (
-                    <box paddingX={2} marginBottom={1}>
-                        <ThinkingIndicator />
-                    </box>
+                    <ThinkingIndicator tick={tick} elapsed={runElapsed} />
                 )}
 
                 {/* Bottom padding spacer */}
                 <box height={1} />
             </scrollbox>
 
-            {/* ── Confirmation dialog (fixed above input bar) ───────── */}
-            {pendingConfirm && (
-                <ConfirmDialog pending={pendingConfirm} />
-            )}
+            {/* ── Confirmation dialog (fixed above the composer) ───────── */}
+            {pendingConfirm && <ConfirmDialog pending={pendingConfirm} />}
 
-            {/* ── Input area ──────────────────────────────────────────── */}
-            <box
-                border={["top"]}
-                borderColor={C.overlay0}
-                backgroundColor={C.surface0}
-            >
-                <InputBar
-                    onSubmit={handleSubmit}
-                    disabled={loading || !!pendingConfirm}
-                    commands={commands}
-                    model={model}
-                    cwd={CWD}
-                    status={status}
-                    sessionNumber={sessionNumber}
-                    modelMenu={
-                        getModelOptions && onSwitchModel
-                            ? {
-                                  getData: getModelOptions,
-                                  providerId,
-                                  onSelect: handleModelSelect,
-                              }
-                            : undefined
-                    }
-                />
-            </box>
+            {/* ── Composer ────────────────────────────────────────────── */}
+            <InputBar
+                onSubmit={handleSubmit}
+                disabled={loading || !!pendingConfirm}
+                commands={commands}
+                model={model}
+                cwd={CWD}
+                status={status}
+                sessionNumber={sessionNumber}
+                modelMenu={
+                    getModelOptions && onSwitchModel
+                        ? {
+                              getData: getModelOptions,
+                              providerId,
+                              onSelect: handleModelSelect,
+                          }
+                        : undefined
+                }
+            />
         </box>
     );
 }
