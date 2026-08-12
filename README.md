@@ -174,53 +174,88 @@ main.ts ──► agent ──► llm-client
 
 ## 5. NightCode vs. Pi (terminal agent)
 
-**[Pi](https://github.com/earendil-works/pi)** (by Mario Zechner / Earendil Works) is a mature, MIT-licensed TypeScript monorepo: a modular agent toolkit + coding-agent CLI, built for extensibility and provider agnosticism. NightCode is a lean single-app implementation of the same idea. The comparison is honest — Pi is far more complete; NightCode's strengths are its built-in safety confirmation, automatic memory, and simplicity.
+**[Pi](https://github.com/earendil-works/pi)** (by Mario Zechner / Earendil Works) is a mature, MIT-licensed TypeScript monorepo: a modular agent toolkit + coding-agent CLI that ranks ~**#6 on [terminal-bench](https://www.tbench.ai/leaderboard/terminal-bench/2.0)** when paired with frontier models. NightCode is a lean single-app implementation of the same idea.
+
+There are **two separate comparisons** to make, and conflating them is a mistake:
+
+- **Feature parity** (§5.1) — the countable surface capabilities.
+- **Benchmark drivers** (§5.2) — the handful of things that actually produce terminal-bench scores.
+
+Pi's #6 rank is **not** explained by its feature list. It is explained by what §5.2 calls benchmark drivers.
+
+### 5.1 Feature parity
 
 | Dimension | NightCode | Pi |
 |---|---|---|
 | What it is | Single terminal coding agent (one package) | Monorepo: agent toolkit + coding-agent CLI (`pi-agent-core`, `pi-ai`, `pi-tui`, `pi-coding-agent`) |
 | Runtime / stack | Bun + TypeScript, React (`@opentui`) | TypeScript, custom differential-rendering TUI (`pi-tui`) |
+| System prompt & tool surface | Large prompt + 15 tools + **full memory dump every turn** | **<1,000-token** core prompt, **7 default tools** (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`), no hidden scaffolding |
 | Model providers | **1** — Groq (`qwen/qwen3.6-27b` main, `llama-3.1-8b-instant` subagent/summarizer) | **20+** — Anthropic, OpenAI, Gemini, Groq, Ollama, Bedrock, OpenRouter, … with unified token normalization |
 | Execution modes | Interactive TUI only | Interactive TUI, print/JSON (pipes), RPC, embeddable SDK |
 | Streaming | ❌ No — full response per turn | ✅ Real-time streaming of thoughts/tools/text |
-| Session persistence | ❌ In-memory only (lost on exit) | ✅ Tree-structured history saved as JSONL |
-| Memory | ✅ Automatic semantic/procedural/episodic memory (Groq classifier + Jina embeddings), persisted to repo root | Context compaction with branch summarization; no cross-session "fact" memory by default |
-| Context management | ✅ LLM summarization past ~100k tokens (chained) | ✅ Compaction + branch summarization into structured checkpoints |
-| Tools | 15 built-in (file, shell, ripgrep, todo, subagent) | Foundational tools + **extension-registered** tools |
+| Session state | ❌ Linear history, in-memory (lost on exit) | ✅ **Tree-structured DAG** saved as JSONL (`~/.pi/agent/sessions/`), with `/tree`, `/fork`, `/clone`, `/compact` |
+| Context loading | ✅ LLM summarization past ~100k tokens (chained) | ✅ Compaction + branch summarization into structured checkpoints |
+| Memory | ✅ Automatic semantic/procedural/episodic memory (Groq classifier + Jina embeddings), persisted to repo root | No cross-session "fact" memory by default — relies on `AGENTS.md` + skills + compaction |
+| Progressive disclosure | ❌ Memory injected wholesale into every system prompt | ✅ Only `AGENTS.md`/`CLAUDE.md` blocks + skill **names** in the prompt; full skill read on demand via `read` |
+| Tools | 15 built-in (file, shell, ripgrep, todo, subagent) | 7 built-in + **extension-registered** tools (`defineTool`, `--tools`/`--exclude-tools` filters) |
 | Subagents | ✅ Built-in `spawn_subagent` tool (scoped, isolated) | ✅ Flexible multi-agent primitives via extensions |
-| Slash commands | ✅ `commands/*.md` templates + `/clear` | ✅ Built-in + extension-registered |
+| Slash commands | ✅ `commands/*.md` templates + `/clear` | ✅ Built-in + extension-registered (`.pi/prompts/`) |
+| Mid-turn steering | ❌ No | ✅ `steer`/`followUp` message queueing — inject corrections without aborting the turn |
 | Extension system | ❌ None (fork the code) | ✅ Extensions: tools, commands, hooks, skills, UI overlays, themes |
-| Permissions / confirmation | ✅ Built-in HITL confirmation for destructive tools | ❌ None by default — runs with full user permissions (docs recommend containers: Gondolin / Docker / OpenShell) |
+| Permissions / confirmation | ✅ Built-in HITL confirmation for destructive tools | ❌ No sandbox; **project-trust** model (`trust.json`, `defaultProjectTrust`) + docs recommend containers (Gondolin / Docker / OpenShell) |
 | Observability | winston logs + OpenTelemetry (OTLP) | `pi-telemetry` contracts |
 | License / maturity | Personal project | MIT, actively maintained, active roadmap (local models, deferred tool loading) |
 
-**Bottom line:** Pi wins on breadth — providers, streaming, persistence, extensions, and non-interactive modes. NightCode wins on two things today: **built-in destructive-action confirmation** (Pi leaves sandboxing to you) and a **true automatic long-term memory** (semantic/procedural/episodic) that persists across sessions. NightCode's `memory/` system is the closest thing to a differentiator.
+### 5.2 Benchmark drivers — why Pi ranks ~#6 and NightCode doesn't
+
+Terminal-bench measures **real CLI task completion** — git workflows, package managers, servers, databases, debugging — inside containers with strict verifiers, binary pass/fail. Two facts about the benchmark drive everything:
+
+1. **The model is the score.** Leaderboard rankings mostly reflect the underlying LLM (frontier reasoning models dominate the top — 80%+). The harness cannot out-reason the model; it can only amplify or sabotage it.
+2. **A bloated harness sabotages the model.** Huge system prompts, tool zoos, and hidden injections burn context headroom and cause truncation failures.
+
+| Driver | Pi | NightCode | Leverage for NightCode |
+|---|---|---|---|
+| **Model access** | 20+ providers → can run Claude/GPT-class models | Groq only — `qwen3.6-27b` (mid-tier open model) | 🔥🔥🔥 The single biggest gap. Everything else is noise next to this. |
+| **Harness minimalism** | <1,000-token prompt, 7 tools, transparent channel to the shell | Large prompt + 15 tools + memory dump injected every turn | 🔥🔥 High — context headroom is directly spent on the task. |
+| **Progressive disclosure** | Context/skills loaded on demand, never pre-injected | Full semantic + procedural memory injected into every system prompt | 🔥🔥 Medium-high — same headroom argument. |
+| **Eval-harness integration** | print/JSON + RPC modes; **Harbor adapter** (`badlogic/pi-terminal-bench`) | Interactive TUI only — cannot even be benchmarked as-is | 🔥 Medium — required to measure anything. |
+| **Session state** | Tree DAG — branch/retry/compact without losing context | Linear, in-memory | 🔥 Low for benchmark scores; high for real-world UX |
+
+**Bottom line:** Pi's rank comes from (1) frontier-model access and (2) keeping the model's context clean — **not** from its feature count. Porting every missing feature to NightCode would barely move a benchmark score while it is locked to a mid-tier model and injects a memory dump into every prompt.
+
+NightCode's genuine advantages remain: **built-in destructive-action confirmation** (Pi leaves sandboxing to you) and a **true automatic long-term memory** (semantic/procedural/episodic) that Pi doesn't have by default.
 
 ---
 
 ## 6. What's Left / Roadmap
 
-Tracked gaps, roughly in priority order:
+The roadmap is split into two tracks, because "missing" means two different things:
 
-### Near term (small, high value)
-1. **Session persistence** — history and sessions are in-memory; survive restarts with JSONL (Pi-style) or SQLite.
-2. **Streaming output** — render the LLM response incrementally instead of per-turn.
-3. **Multi-provider support** — the `LLMClient` interface already abstracts this; add a client factory + env-key config.
-4. **Move hardcoded API keys to env** — Groq/Jina keys are currently baked into source (`.env` is loaded but not authoritative); this is a security issue.
+- **Track A — benchmark drivers:** changes that actually move terminal-bench performance.
+- **Track B — feature parity & UX:** nice-to-haves that round out the product but don't move scores.
+
+### 6.1 Track A — benchmark drivers
+
+1. **Provider-agnostic client** 🔥🔥🔥 — the `LLMClient` interface already abstracts this; add a client factory + BYOK env config (Anthropic, OpenAI, …). Unlocks frontier models — the single highest-leverage change in this entire document.
+2. **Slim the system prompt & tool surface** 🔥🔥 — measure current prompt size; trim the 15-tool list toward essentials; remove mid-session injections.
+3. **Progressive memory disclosure** 🔥🔥 — stop injecting the full semantic/procedural dump every turn; inject a compact summary or only the slices relevant to the current query (episodic retrieval is already query-relative).
+4. **Non-interactive mode + eval adapter** 🔥 — a print/JSON execution mode so NightCode can run under terminal-bench/Harbor and be measured at all.
+5. **Session tree / branching** — DAG history with fork/retry/compact, mirroring Pi's `/tree` `/fork` `/clone`.
+
+### 6.2 Track B — feature parity & UX
+
+1. **Move hardcoded API keys to env** (do this soon regardless) — Groq/Jina keys are baked into source; `.env` is loaded but not authoritative.
+2. **Session persistence** — history/sessions are in-memory; survive restarts with JSONL or SQLite.
+3. **Streaming output** — render the LLM response incrementally instead of per-turn.
+4. **Extension/skill system** — let users add tools/commands without forking (the `commands/` templates are a first step toward Pi-style skills).
 5. **Sensitive-file validation layer** (from `things-left.md`) — block tools from modifying files containing personal/sensitive data.
 6. **More tools** (from `things-left.md`) — e.g. git integration beyond raw `bash`.
-
-### Medium term
 7. **Review context compaction** (from `things-left.md`) — re-read `context.ts` summarization; consider Pi-style checkpoint summaries.
-8. **Non-interactive mode** — print/JSON output for scripts and pipelines.
-9. **Extension/skill system** — let users add tools/commands without forking (the `commands/` templates are a first step).
-10. **A real test framework** — the assert-based `*.check.*` scripts work but don't scale; migrate when the suite grows.
-
-### Longer term
-11. Local model support (Ollama), MCP integration, vision/image input, agent-evaluation harness (Pi is publishing training sessions to Hugging Face; an open eval loop would help).
+8. **A real test framework** — the assert-based `*.check.*` scripts work but don't scale; migrate when the suite grows.
+9. **Longer term** — local models (Ollama), MCP integration, vision/image input, agent-evaluation loop.
 
 ### Known limitations
-- Single model/provider; no fallback.
+- Single model/provider; no fallback — this is Track A #1.
 - No sandboxing beyond the destructive-command regex + confirmation dialog (same stance as Pi's default).
 - Memory extraction depends on Groq + Jina network calls; if they fail, extraction silently degrades (logged, never fatal).
 - Episodic recall is similarity-based over a JSONL file — no dedup or forgetting policy yet.
