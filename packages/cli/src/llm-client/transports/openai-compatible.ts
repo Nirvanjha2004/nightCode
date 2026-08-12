@@ -29,6 +29,9 @@ Never emit JSON describing a tool call.
 If a tool is needed, use the provided tool interface.
 Otherwise answer normally.`;
 
+const NO_TOOLS_PROMPT =
+    "\n\nIMPORTANT:\nTool calling is currently unavailable. Answer the user's request directly in plain text based on the conversation so far.";
+
 /** Groq's SDK wraps the API error body: `err.error` is the WHOLE body. */
 export function getGroqErrorCode(err: unknown): string | undefined {
     return extractErrorCode(err);
@@ -183,15 +186,43 @@ export class OpenAICompatibleProvider implements LLMProvider {
     // ── Streaming ──────────────────────────────────────────────────────
 
     async *stream(context: ContextType, signal?: AbortSignal): AsyncGenerator<LLMEvent> {
-        yield* withRetryStream(
-            () => this.rawStream(context, signal),
-            {
-                maxRetries: 2,
-                onRetry: (err, attempt, delay) =>
-                    logger.warn(`[${this.providerId}] retry ${attempt} after ${Math.round(delay)}ms: ${(err as Error).message}`),
-            },
-            signal
-        );
+        const retry = {
+            maxRetries: 2,
+            onRetry: (err: unknown, attempt: number, delay: number) =>
+                logger.warn(`[${this.providerId}] retry ${attempt} after ${Math.round(delay)}ms: ${(err as Error).message}`),
+        };
+        if (!this.config.repairToolCalls) {
+            yield* withRetryStream(() => this.rawStream(context, signal), retry, signal);
+            return;
+        }
+        // Groq-style malformed-tool-call repair, hoisted from chat() into the
+        // stream so EVERY consumer (the agent loop included) gets the same
+        // recovery the non-streaming path had: replay with a repair prompt,
+        // then retry without tools. tool_use_failed is not retryable, so
+        // withRetryStream won't touch it — this loop owns that retry.
+        let attempt = 0;
+        for (;;) {
+            const attemptContext =
+                attempt === 0
+                    ? context
+                    : attempt === 1
+                      ? { ...context, systemPrompt: context.systemPrompt + REPAIR_PROMPT }
+                      : { ...context, tools: [], systemPrompt: context.systemPrompt + NO_TOOLS_PROMPT };
+            try {
+                yield* withRetryStream(() => this.rawStream(attemptContext, signal), retry, signal);
+                return;
+            } catch (err) {
+                if (signal?.aborted) throw err;
+                if (extractErrorCode(err) === "tool_use_failed" && attempt < 2) {
+                    logger.warn(
+                        `[${this.providerId}] tool_use_failed — retrying ${attempt === 0 ? "with a tool-calling repair prompt" : "without tools (text-only)"}`
+                    );
+                    attempt++;
+                } else {
+                    throw err;
+                }
+            }
+        }
     }
 
     private async *rawStream(context: ContextType, signal?: AbortSignal): AsyncGenerator<LLMEvent> {
@@ -354,43 +385,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
     // ── Non-streaming convenience ──────────────────────────────────────
 
     async chat(context: ContextType, signal?: AbortSignal): Promise<LLMResponse> {
-        try {
-            return await collectResponse(this.stream(context, signal));
-        } catch (err) {
-            if (signal?.aborted) throw err;
-            // Groq-style tool-call repair: the model emitted a malformed tool
-            // call; replay with a repair prompt, then retry without tools.
-            // ponytail: the original Groq client replayed the rejected
-            // generation back as feedback; the repair prompt alone covers the
-            // same recovery with a smaller diff.
-            if (this.config.repairToolCalls && extractErrorCode(err) === "tool_use_failed") {
-                logger.warn(`[${this.providerId}] tool_use_failed — retrying with tool-calling repair prompt`);
-                try {
-                    return await collectResponse(
-                        this.stream({ ...context, systemPrompt: context.systemPrompt + REPAIR_PROMPT }, signal)
-                    );
-                } catch (repairErr) {
-                    if (signal?.aborted) throw repairErr;
-                    if (extractErrorCode(repairErr) === "tool_use_failed") {
-                        logger.warn(`[${this.providerId}] repair retry failed too — retrying without tools (text-only)`);
-                        return await collectResponse(
-                            this.stream(
-                                {
-                                    ...context,
-                                    tools: [],
-                                    systemPrompt:
-                                        context.systemPrompt +
-                                        `\n\nIMPORTANT:\nTool calling is currently unavailable. Answer the user's request directly in plain text based on the conversation so far.`,
-                                },
-                                signal
-                            )
-                        );
-                    }
-                    throw repairErr;
-                }
-            }
-            throw err;
-        }
+        // The tool_use_failed repair lives inside stream() now, so the loop
+        // (which consumes the stream directly) gets the same recovery.
+        return collectResponse(this.stream(context, signal));
     }
 
     private mapUsage(u: Record<string, number> | undefined, spec: ModelSpec): UsageInfo | undefined {

@@ -199,7 +199,10 @@ export interface LLMProvider {
 
 /** A minimal chat surface — what the agent core needs from the LLM layer. */
 export type ChatLLM = {
+    /** Non-streaming convenience — the loop uses stream() for live rendering. */
     chat(context: ContextType, signal?: AbortSignal): Promise<LLMResponse>;
+    /** Normalized streaming events — the loop consumes these (Pi-style). */
+    stream(context: ContextType, signal?: AbortSignal): AsyncGenerator<LLMEvent>;
     /** Cheap summarizer model for the active provider. */
     summarizerModel(): string;
     /** Context-window limit for a model id (drives compression thresholds). */

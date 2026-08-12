@@ -309,6 +309,10 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
     const [activity, setActivity] = useState<AgentEvent[]>([]);
     const [liveTool, setLiveTool] = useState<{ toolName: string; argsPreview: string; startedAt: number } | null>(null);
     const [liveElapsed, setLiveElapsed] = useState(0);
+    // Live assistant reply — appended as text_delta events arrive (Pi-style
+    // streaming). Rendered in the same slot the final message lands in, then
+    // replaced by it when the run resolves.
+    const [streaming, setStreaming] = useState<{ id: string; text: string } | null>(null);
 
     // Tick the live tool row's elapsed counter once a second.
     useEffect(() => {
@@ -333,6 +337,14 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             // A cancelled run may have left a ghost live-tool row — clear it.
             setLiveTool(null);
             setActivity((prev) => [...prev, event]);
+            return;
+        }
+        if (event.type === "text_delta") {
+            // Append to the live assistant bubble (create it on first delta).
+            setStreaming((prev) => ({
+                id: prev?.id ?? crypto.randomUUID(),
+                text: (prev?.text ?? "") + event.text,
+            }));
             return;
         }
         setActivity((prev) => [...prev, event]);
@@ -460,6 +472,7 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             setMessages([]);
             setActivity([]);
             setLiveTool(null);
+            setStreaming(null);
             setStatus("ready");
             setNotice("Session cleared. Starting a new conversation.");
             logger.info(`[UI] /clear — fresh session: ${next.sessionId} (#${next.sessionNumber})`);
@@ -484,9 +497,11 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
             });
             logger.info(`[UI] Agent response received (len=${response.length})`);
             push("assistant", response);
+            setStreaming(null); // the live bubble becomes the stored message
             setStatus("ready");
         } catch (err) {
             setLiveTool(null); // an aborted run may have left a ghost tool row
+            setStreaming(null); // discard any partially-streamed reply
             // Cancellation is NOT an error: the activity feed shows "⚠ Cancelled",
             // and the session stays usable for the next prompt.
             if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
@@ -566,6 +581,13 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
                     </box>
                 ))}
 
+                {/* Live streaming reply — same slot the final message will land in */}
+                {streaming && (
+                    <box key={streaming.id} marginBottom={1}>
+                        <MessageBubble msg={{ id: streaming.id, role: "assistant", content: streaming.text }} />
+                    </box>
+                )}
+
                 {activity.length > 0 && (
                     <box paddingX={2} flexDirection="column" marginBottom={1}>
                         {activity.map((event, i) => {
@@ -594,7 +616,7 @@ export function App({ sessionId: initialSessionId, sessionNumber: initialSession
                     </box>
                 )}
 
-                {loading && !liveTool && (
+                {loading && !liveTool && !streaming && (
                     <box paddingX={2} marginBottom={1}>
                         <ThinkingIndicator />
                     </box>

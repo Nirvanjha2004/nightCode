@@ -33,6 +33,11 @@ async function main() {
         }
         const llm: ChatLLM = {
             chat: async () => ({ type: "text", content: "stub" }),
+            // Never called by ContextBuilder — required by the ChatLLM interface.
+            stream: async function* () {
+                yield { type: "text_delta", text: "stub" };
+                yield { type: "finish" };
+            },
             summarizerModel: () => "stub-model",
             contextLimit: () => 131_072,
             subagentModel: () => "stub-model",

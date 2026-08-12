@@ -138,6 +138,25 @@ export async function collectResponse(
     };
 }
 
+/**
+ * Convert a non-streaming LLMResponse into the equivalent normalized events.
+ * Used by check-file stubs (and any caller with only a chat()-style response)
+ * to feed the same event pipeline the real transports emit.
+ */
+export async function* eventsFromResponse(response: LLMResponse): AsyncGenerator<LLMEvent> {
+    if (response.type === "tool_calls") {
+        for (const [index, tc] of response.toolCalls.entries()) {
+            yield { type: "tool_call_start", index, id: tc.id, name: tc.name };
+            yield { type: "tool_call_delta", index, argumentsDelta: JSON.stringify(tc.args) };
+            yield { type: "tool_call_end", index };
+        }
+    } else if (response.content) {
+        yield { type: "text_delta", text: response.content };
+    }
+    if (response.reasoning) yield { type: "reasoning_delta", text: response.reasoning };
+    yield { type: "finish", usage: response.usage };
+}
+
 /** Estimate USD cost from usage + model pricing; "unknown" when pricing is absent. */
 export function estimateCost(usage: UsageInfo, model?: ModelSpec): number | "unknown" {
     if (!model?.pricing) return "unknown";

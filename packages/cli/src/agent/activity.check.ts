@@ -19,7 +19,8 @@ import { EpisodicMemoryManager } from "./memory/EpisodicMemoryManager";
 import { SemanticMemoryManager } from "./memory/SemanticMemoryManager";
 import { ProceduralMemoryManager } from "./memory/ProceduralMemoryManager";
 import type { AgentEvent, ContextType, Tool } from "./types";
-import type { ChatLLM, LLMResponse } from "../llm-client/types";
+import type { ChatLLM, LLMEvent, LLMResponse } from "../llm-client/types";
+import { eventsFromResponse } from "../llm-client/stream";
 
 async function main() {
     const dir = mkdtempSync(join(tmpdir(), "activity-check-"));
@@ -28,6 +29,12 @@ async function main() {
     // which never triggers at this message volume — a stub suffices.
     const fakeLLM = {
         chat: async (): Promise<LLMResponse> => ({ type: "text", content: "stub" }),
+        // ContextBuilder only ever calls chat() (summarization) — stream is
+        // required by the interface but never exercised here.
+        stream: async function* (): AsyncGenerator<LLMEvent> {
+            yield { type: "text_delta", text: "stub" };
+            yield { type: "finish" };
+        },
         summarizerModel: () => "stub-model",
         contextLimit: () => 131_072,
         subagentModel: () => "stub-model",
@@ -166,6 +173,10 @@ async function main() {
                 }
                 return { type: "text", content: "all good" };
             },
+            // The loop consumes stream(), not chat() — delegate and convert.
+            stream: async function* (_context: ContextType, _signal?: AbortSignal) {
+                yield* eventsFromResponse(await this.chat(_context));
+            },
             summarizerModel: () => "stub-model",
             contextLimit: () => 131_072,
             subagentModel: () => "stub-model",
@@ -237,7 +248,18 @@ async function main() {
         // The loop must still resolve normally with events enabled.
         assert.equal(calls, 2, "LLM called twice (tools + answer)");
 
-        console.log("PASS — activity events stream in order with sane previews.");
+        // ── streaming: assistant text reaches the UI live (Pi-style) ──
+        const deltas = events.filter(
+            (e): e is Extract<AgentEvent, { type: "text_delta" }> => e.type === "text_delta"
+        );
+        assert.ok(deltas.length >= 1, "assistant text streams to the UI as deltas");
+        assert.equal(
+            deltas.map((d) => d.text).join(""),
+            "all good",
+            "streamed deltas reassemble the final answer"
+        );
+
+        console.log("PASS — activity events stream in order with sane previews; text streams live.");
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }

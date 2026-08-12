@@ -19,7 +19,8 @@ import { SemanticMemoryManager } from "./memory/SemanticMemoryManager";
 import { ProceduralMemoryManager } from "./memory/ProceduralMemoryManager";
 import { read, grep, spawnSubagent } from "./tools";
 import type { ContextType } from "./types";
-import type { ChatLLM, LLMResponse } from "../llm-client/types";
+import type { ChatLLM, LLMEvent, LLMResponse } from "../llm-client/types";
+import { eventsFromResponse } from "../llm-client/stream";
 
 async function main() {
     const dir = mkdtempSync(join(tmpdir(), "subagent-check-"));
@@ -28,6 +29,12 @@ async function main() {
     // which never triggers at this message volume — a stub suffices.
     const fakeLLM = {
         chat: async (): Promise<LLMResponse> => ({ type: "text", content: "stub" }),
+        // ContextBuilder only ever calls chat() (summarization) — stream is
+        // required by the interface but never exercised here.
+        stream: async function* (): AsyncGenerator<LLMEvent> {
+            yield { type: "text_delta", text: "stub" };
+            yield { type: "finish" };
+        },
         summarizerModel: () => "stub-model",
         contextLimit: () => 131_072,
         subagentModel: () => "stub-model",
@@ -95,6 +102,9 @@ async function main() {
                     };
                 }
                 return { type: "text", content: callCount === 2 ? "subagent report" : "parent summary" };
+            },
+            stream: async function* (_context: ContextType, _signal?: AbortSignal) {
+                yield* eventsFromResponse(await this.chat(_context));
             },
             summarizerModel: () => "stub-model",
             contextLimit: () => 131_072,

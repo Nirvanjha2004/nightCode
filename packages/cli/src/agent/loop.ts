@@ -3,7 +3,8 @@ import type { AgentHarness } from "./agent-harness";
 import { CancelledError } from "./types";
 import type { AgentEvent, ConfirmHook, ToolCall } from "./types";
 import { resolveSlashCommand } from "./commands";
-import type { ChatLLM } from "../llm-client/types";
+import { collectResponse } from "../llm-client/stream";
+import type { ChatLLM, LLMEvent, LLMResponse } from "../llm-client/types";
 import { logger } from "../logger";
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { markSpanError, tracer } from "../telemetry";
@@ -16,6 +17,24 @@ import { markSpanError, tracer } from "../telemetry";
 function throwIfAborted(signal?: AbortSignal): void {
     if (signal?.aborted) {
         throw new CancelledError();
+    }
+}
+
+/**
+ * Tee a provider's normalized stream: text deltas are forwarded to the UI
+ * live (Pi-style incremental rendering) while the stream is still consumed
+ * by collectResponse to rebuild the same full response chat() would return.
+ * Response semantics are identical to the old non-streaming path.
+ */
+async function* forwardTextDeltas(
+    stream: AsyncGenerator<LLMEvent>,
+    onEvent?: (event: AgentEvent) => void
+): AsyncGenerator<LLMEvent> {
+    for await (const event of stream) {
+        if (event.type === "text_delta") {
+            onEvent?.({ type: "text_delta", text: event.text });
+        }
+        yield event;
     }
 }
 
@@ -257,8 +276,13 @@ export class AgentLoop {
                                 iterSpan.setAttribute("context.message.count", context.messages.length);
                                 iterSpan.setAttribute("context.tool.count", context.tools.length);
 
-                                // Step 3: LLM call — traced as "llm.call" inside the client
-                                const response = await this.llm.chat(context, options?.signal);
+                                // Step 3: LLM call — streamed (Pi-style). The provider's
+                                // normalized text deltas reach the UI live while
+                                // collectResponse reassembles the same full response
+                                // chat() used to return; history storage below is untouched.
+                                const response = await collectResponse(
+                                    forwardTextDeltas(this.llm.stream(context, options?.signal), options?.onEvent)
+                                );
                                 throwIfAborted(options?.signal);
 
                                 iterSpan.addEvent("LLM response received");

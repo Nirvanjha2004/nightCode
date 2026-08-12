@@ -26,7 +26,8 @@ import { ProceduralMemoryManager } from "./memory/ProceduralMemoryManager";
 import { bash } from "./tools";
 import { OpenAICompatibleProvider } from "../llm-client/transports/openai-compatible";
 import type { ContextType, Tool } from "./types";
-import type { ChatLLM, LLMResponse } from "../llm-client/types";
+import type { ChatLLM, LLMEvent, LLMResponse } from "../llm-client/types";
+import { eventsFromResponse } from "../llm-client/stream";
 
 const isAbort = (err: unknown) => err instanceof Error && err.name === "AbortError";
 
@@ -37,6 +38,12 @@ async function main() {
     // which never triggers at this message volume — a stub suffices.
     const fakeLLM = {
         chat: async (): Promise<LLMResponse> => ({ type: "text", content: "stub" }),
+        // ContextBuilder only ever calls chat() (summarization) — stream is
+        // required by the interface but never exercised here.
+        stream: async function* (): AsyncGenerator<LLMEvent> {
+            yield { type: "text_delta", text: "stub" };
+            yield { type: "finish" };
+        },
         summarizerModel: () => "stub-model",
         contextLimit: () => 131_072,
         subagentModel: () => "stub-model",
@@ -100,6 +107,9 @@ async function main() {
                     toolCalls: [{ id: "c1", name: "slow_tool", args: {} }],
                 };
             },
+            stream: async function* (_context: ContextType, _signal?: AbortSignal) {
+                yield* eventsFromResponse(await this.chat(_context));
+            },
             summarizerModel: () => "stub-model",
             contextLimit: () => 131_072,
             subagentModel: () => "stub-model",
@@ -154,6 +164,9 @@ async function main() {
                         { id: "b2", name: "slow_tool", args: {} },
                     ],
                 };
+            },
+            stream: async function* (_context: ContextType, _signal?: AbortSignal) {
+                yield* eventsFromResponse(await this.chat(_context));
             },
             summarizerModel: () => "stub-model",
             contextLimit: () => 131_072,

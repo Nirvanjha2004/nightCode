@@ -81,6 +81,7 @@ bun run packages/cli/src/ui/scroll.check.tsx
 | Feature | How |
 |---|---|
 | ReAct loop | `AgentLoop` runs up to 10 iterations of context → LLM → tool calls → result, until a final text answer |
+| Streaming | Assistant text renders **live** as the model generates (Pi-style): the loop consumes the provider's normalized stream and forwards `text_delta` events to the UI; history still stores one complete message ([docs/streaming.md](docs/streaming.md)) |
 | 15 tools | Model-visible surface is Pi-style: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `todoWrite`, `spawn_subagent` (the rest — `append`, `delete`, `mkdir`, `glob`, `rename`, `copy` — stay registered for scopes but aren't advertised) |
 | Tool result handling | Shell tools return formatted stdout/stderr/exit code as a *result* (not an exception) so the agent can recover; structured `{ ok: false }` signals UI failure |
 | Context window management | At ~100k estimated tokens, old messages are LLM-summarized (chainable across compressions), preserving the last 15 messages; hard fallbacks keep the window bounded |
@@ -107,6 +108,7 @@ bun run packages/cli/src/ui/scroll.check.tsx
 - **Markdown rendering** for assistant replies (headings, bold, code, lists, wrapping)
 - **Real-time activity feed** — stage rows ("· loading memory"), iteration counters, live tool row with elapsed ticker, `✓/✗` results with bounded previews
 - **Concise failure summaries** — `exit code N` + first stderr line, capped at 2 lines / 120 chars; `File not found: <path>` for missing reads
+- **Live streaming replies** — assistant text renders incrementally as the model generates (Pi-style), in the same slot the final message lands in
 - **Status bar** — model, session number, agent status (ready/running/cancelled/error)
 - **Slash-command autocomplete menu** while typing
 - **Narrow-width layout**, header meta hiding, one-line status bar
@@ -171,7 +173,7 @@ main.ts ──► agent ──► llm-client
 
 **Boot order** (`src/main.ts`): load config + build the provider system (friendly boot error if no credentials) → construct managers (messages, sessions, tools, memory) → register 15 tools → build context builder, command registry (loads root `commands/`), harness, LLM router, loop → create first session → hand off to `TerminalUI`.
 
-**How a turn flows:** user input → slash-command resolution → message stored (raw input kept) → memory context built once → ReAct iterations (`context.build` → `llm.chat` → tools) → final text answer stored → fire-and-forget memory extraction. Events (`stage`/`iteration`/`tool_start`/`tool_end`) stream to the UI throughout. Full detail: [`docs/agent-event-flow.md`](docs/agent-event-flow.md).
+**How a turn flows:** user input → slash-command resolution → message stored (raw input kept) → memory context built once → ReAct iterations (`context.build` → `llm.stream` → tools) → final text answer stored → fire-and-forget memory extraction. Events (`stage`/`iteration`/`tool_start`/`tool_end`/`text_delta`) stream to the UI throughout — assistant text renders live (Pi-style). Full detail: [`docs/agent-event-flow.md`](docs/agent-event-flow.md) and [`docs/streaming.md`](docs/streaming.md).
 
 ---
 
@@ -195,7 +197,7 @@ Pi's #6 rank is **not** explained by its feature list. It is explained by what �
 | System prompt & tool surface | **Compact Pi-style prompt (~700 tokens)** + **9-tool model-visible surface** (Pi's 7 + `todoWrite` + `spawn_subagent`) + full memory dump every turn ([docs/prompt-and-tools.md](docs/prompt-and-tools.md)) | **<1,000-token** core prompt, **7 default tools** (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`), no hidden scaffolding |
 | Model providers | **25+** — OpenAI, Anthropic, Gemini, Groq, DeepSeek, Mistral, OpenRouter, Bedrock, Vertex, Azure, Ollama, … one internal interface + per-provider adapters ([docs/providers.md](docs/providers.md)) | **20+** — with unified token normalization |
 | Execution modes | Interactive TUI only | Interactive TUI, print/JSON (pipes), RPC, embeddable SDK |
-| Streaming | ⏳ Providers stream through one normalized event format (text/reasoning/tool deltas); the loop still consumes full responses — incremental UI rendering is on the roadmap (§6) | ✅ Real-time streaming of thoughts/tools/text |
+| Streaming | ✅ **Live assistant-text rendering** — the loop consumes the provider's normalized stream and the UI types the answer out as it arrives ([docs/streaming.md](docs/streaming.md)); reasoning/tool-argument deltas are normalized but only text renders so far | ✅ Real-time streaming of thoughts/tools/text |
 | Session state | ❌ Linear history, in-memory (lost on exit) | ✅ **Tree-structured DAG** saved as JSONL (`~/.pi/agent/sessions/`), with `/tree`, `/fork`, `/clone`, `/compact` |
 | Context loading | ✅ LLM summarization past ~100k tokens (chained) | ✅ Compaction + branch summarization into structured checkpoints |
 | Memory | ✅ Automatic semantic/procedural/episodic memory (Groq classifier + Jina embeddings), persisted to repo root | No cross-session "fact" memory by default — relies on `AGENTS.md` + skills + compaction |
@@ -249,7 +251,7 @@ The roadmap is split into two tracks, because "missing" means two different thin
 
 1. ~~**Move hardcoded API keys to env**~~ ✅ **Done** — no keys in source; `.env` + `nightcode.config.json` are authoritative.
 2. **Session persistence** — history/sessions are in-memory; survive restarts with JSONL or SQLite.
-3. **Streaming output** — the provider layer already normalizes streams (`text_delta`, `reasoning_delta`, `tool_call_*`); render them incrementally in the UI instead of per-turn.
+3. ~~**Streaming output**~~ ✅ **Done** — providers normalize streams (`text_delta`, `reasoning_delta`, `tool_call_*`); the loop consumes them and the UI renders assistant text live ([docs/streaming.md](docs/streaming.md)). Remaining: rendering reasoning/thinking text.
 4. **Extension/skill system** — let users add tools/commands without forking (the `commands/` templates are a first step toward Pi-style skills).
 5. **Sensitive-file validation layer** (from `things-left.md`) — block tools from modifying files containing personal/sensitive data.
 6. **More tools** (from `things-left.md`) — e.g. git integration beyond raw `bash`.
@@ -262,7 +264,7 @@ The roadmap is split into two tracks, because "missing" means two different thin
 - No sandboxing beyond the destructive-command regex + confirmation dialog (same stance as Pi's default).
 - Memory extraction depends on the active provider + Jina network calls; if they fail, extraction silently degrades (logged, never fatal).
 - Episodic recall is similarity-based over a JSONL file — no dedup or forgetting policy yet.
-- Full incremental streaming rendering and session persistence are still on the roadmap.
+- Session persistence is still on the roadmap; reasoning/thinking text is normalized but not yet rendered.
 
 ---
 
@@ -276,6 +278,7 @@ The roadmap is split into two tracks, because "missing" means two different thin
 | [`docs/cancel-latency-postmortem.md`](docs/cancel-latency-postmortem.md) | Cancellation latency fix and watchdog design |
 | [`docs/providers.md`](docs/providers.md) | Provider-neutral LLM layer — providers, auth, custom/local models, troubleshooting |
 | [`docs/prompt-and-tools.md`](docs/prompt-and-tools.md) | Pi-style system prompt + model-visible tool surface — structure, customization, interactions |
+| [`docs/streaming.md`](docs/streaming.md) | Streaming pipeline — provider events → loop → live UI rendering |
 
 **Conventions:** checks live next to the code they test (`*.check.ts` / `*.check.tsx`, run directly) · runtime data always goes to the repo root via `src/paths.ts` · `ui/` may import `agent/` types, never the reverse · no `utils/`/`helpers/` dumping grounds — group by responsibility.
 

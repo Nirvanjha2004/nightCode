@@ -131,6 +131,11 @@ Run git diff. Do NOT modify files.`);
     // never actually called.
     const cb = new ContextBuilder(mm, sm, tr, {
         chat: async (): Promise<LLMResponse> => ({ type: "text", content: "stub" }),
+        // Never called by ContextBuilder — required by the ChatLLM interface.
+        stream: async function* () {
+            yield { type: "text_delta", text: "stub" };
+            yield { type: "finish" };
+        },
         summarizerModel: () => "stub-model",
         contextLimit: () => 131_072,
         subagentModel: () => "stub-model",
