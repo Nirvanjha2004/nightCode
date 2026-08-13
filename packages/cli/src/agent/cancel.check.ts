@@ -116,7 +116,7 @@ async function main() {
         };
         const loop = new AgentLoop(harness, llm, 5);
         harness.agentLoop = loop;
-        const sessionId = sessionManager.create({ model: "llama-3.3-70b-versatile" });
+        const sessionId = sessionManager.create({ model: "qwen/qwen3.6-27b" });
 
         const controller = new AbortController();
         const executePromise = loop.execute(sessionId, "do the thing", {
@@ -174,7 +174,7 @@ async function main() {
         };
         const loop2 = new AgentLoop(h2, llm2, 5);
         h2.agentLoop = loop2;
-        const sessionId2 = sm2.create({ model: "llama-3.3-70b-versatile" });
+        const sessionId2 = sm2.create({ model: "qwen/qwen3.6-27b" });
 
         const c2 = new AbortController();
         const executePromise2 = loop2.execute(sessionId2, "batch", {
@@ -198,7 +198,7 @@ async function main() {
         // ── 3. Pre-aborted signal: run never starts ──
         const pre = new AbortController();
         pre.abort();
-        const sessionId3 = sessionManager.create({ model: "llama-3.3-70b-versatile" });
+        const sessionId3 = sessionManager.create({ model: "qwen/qwen3.6-27b" });
         await assert.rejects(
             loop.execute(sessionId3, "never runs", { signal: pre.signal }),
             isAbort,

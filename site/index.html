@@ -10,6 +10,10 @@
 <meta property="og:title" content="NightCode">
 <meta property="og:description" content="A coding agent that lives in your terminal. 25+ providers, real tool use, automatic memory, destructive-action confirmation.">
 <meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='5' y='5' width='14' height='14' rx='4' transform='rotate(45 12 12)' fill='none' stroke='%23FF7A2F' stroke-width='2'/%3E%3Ccircle cx='12' cy='12' r='2.4' fill='%23FF7A2F'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ═════════════════════════════════════════════════════════════════════════
    Light glass.
@@ -18,6 +22,12 @@
    with the one dark object on it — the terminal. That terminal keeps the
    program's real palette (packages/cli/src/ui/theme.ts, --t-* below), which
    is why it reads as a device resting on the page instead of a picture of one.
+
+   Type system, three roles, each tied to what it's labeling:
+   — display (Space Grotesk)  → editorial headlines, the human-facing voice
+   — body    (Hanken Grotesk) → paragraph prose, easy to read at length
+   — mono    (JetBrains Mono) → anything that is the program's own voice:
+                                 the terminal, code, labels, chips, the brand
    ═════════════════════════════════════════════════════════════════════════ */
 :root {
   color-scheme: light;
@@ -65,8 +75,9 @@
   --t-jade:   #3DDC97;
   --t-code:   #FFB870;
 
-  --mono: ui-monospace, "SF Mono", "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono:    "JetBrains Mono", ui-monospace, "SF Mono", "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+  --sans:    "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display: "Space Grotesk", var(--sans);
 
   --maxw: 1080px;
   --ease: cubic-bezier(.22,.61,.36,1);
@@ -88,6 +99,8 @@ body {
   overflow-x: hidden;
 }
 
+:focus-visible { outline: 2px solid var(--accent-lt); outline-offset: 3px; border-radius: 8px; }
+
 /* The mesh. Four wide, low-saturation pools drifting behind everything —
    this is the only thing the frosted surfaces have to refract, so it has to
    be soft enough never to read as "gradient background". */
@@ -107,18 +120,32 @@ body::before {
   to   { transform: translate3d(1.2%, 1.6%, 0) scale(1.07); }
 }
 
+/* Fine film-grain over the whole page so flat glass never reads as a bare
+   CSS gradient — a production detail, kept just barely perceptible. */
+.noise {
+  position: fixed; inset: 0; z-index: 500; pointer-events: none;
+  opacity: .035; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.scroll-progress {
+  position: fixed; top: 0; left: 0; height: 3px; width: 0%;
+  background: var(--fire); z-index: 1000; pointer-events: none;
+  box-shadow: 0 0 10px rgba(255,122,47,.55);
+}
+
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-h1, h2, h3 { color: var(--ink); line-height: 1.1; margin: 0; }
-h1 { letter-spacing: -.038em; }
-h2 { font-size: clamp(30px, 4vw, 46px); font-weight: 600; letter-spacing: -.032em; }
-h3 { font-size: 17.5px; font-weight: 600; letter-spacing: -.018em; line-height: 1.35; }
+h1, h2, h3 { color: var(--ink); line-height: 1.1; margin: 0; font-family: var(--display); }
+h1 { letter-spacing: -.036em; font-weight: 600; }
+h2 { font-size: clamp(30px, 4vw, 46px); font-weight: 600; letter-spacing: -.03em; }
+h3 { font-size: 17.5px; font-weight: 600; letter-spacing: -.014em; line-height: 1.35; }
 p { margin: 0; }
 code, kbd, pre { font-family: var(--mono); }
-section[id], div[id] { scroll-margin-top: 76px; }
+section[id], div[id] { scroll-margin-top: 104px; }
 
 .kbd {
   display: inline-block; font-size: 12px; line-height: 1.55; font-weight: 500;
@@ -128,20 +155,44 @@ section[id], div[id] { scroll-margin-top: 76px; }
   box-shadow: 0 1px 0 rgba(19,19,24,.06), inset 0 1px 0 #fff;
 }
 
-/* ── Nav ─────────────────────────────────────────────────────────────── */
+/* small "code bracket" mark used before every section eyebrow — the one
+   repeated glyph on the page, always reading "this is the tool's own
+   structure talking", never decoration for its own sake. */
+.br-ic { flex: 0 0 auto; display: inline-block; vertical-align: -2px; }
+
+/* ── Nav — floating capsule, not a bar ──────────────────────────────── */
 header.nav {
-  position: sticky; top: 0; z-index: 50;
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
-  backdrop-filter: blur(22px) saturate(180%);
-  background: rgba(246,246,249,.62);
-  border-bottom: 1px solid var(--border);
+  position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+  padding: 16px 20px 0; pointer-events: none;
+  transition: padding .4s var(--ease);
 }
-.nav-in { display: flex; align-items: center; gap: 24px; height: 60px; }
-.brand { display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--ink); letter-spacing: -.02em; }
-.brand .mark { color: var(--accent-lt); }
-.nav-links { display: flex; gap: 24px; margin-left: auto; font-size: 14.5px; }
-.nav-links a { color: var(--muted); font-weight: 450; }
+header.nav.scrolled { padding-top: 9px; }
+
+.nav-in {
+  pointer-events: auto;
+  max-width: 940px; margin: 0 auto;
+  display: flex; align-items: center; gap: 22px; height: 58px;
+  padding: 0 10px 0 20px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.66);
+  border: 1px solid var(--border);
+  box-shadow: var(--sh-2), inset 0 1px 0 var(--edge);
+  -webkit-backdrop-filter: blur(26px) saturate(190%);
+  backdrop-filter: blur(26px) saturate(190%);
+  transition: height .4s var(--ease), background .4s var(--ease), box-shadow .4s var(--ease);
+}
+header.nav.scrolled .nav-in {
+  height: 50px;
+  background: rgba(255,255,255,.86);
+  box-shadow: var(--sh-3), inset 0 1px 0 var(--edge);
+}
+
+.brand { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-weight: 600; font-size: 15px; color: var(--ink); letter-spacing: -.02em; }
+.brand .mark-svg { flex: 0 0 auto; display: block; }
+.nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14.5px; }
+.nav-links a { color: var(--muted); font-weight: 450; transition: color .2s; }
 .nav-links a:hover { color: var(--ink); text-decoration: none; }
+.nav-links a.active { color: var(--accent); font-weight: 600; }
 @media (max-width: 780px) { .nav-links a:not(.ghbtn) { display: none; } }
 
 .ghbtn {
@@ -154,11 +205,12 @@ header.nav {
 .ghbtn:hover { text-decoration: none; transform: translateY(-1px); box-shadow: var(--sh-2), inset 0 1px 0 var(--edge); }
 
 /* ── Hero ────────────────────────────────────────────────────────────── */
-.hero { padding: 96px 0 60px; text-align: center; }
+.hero { padding: 140px 0 60px; text-align: center; }
+@media (max-width: 620px) { .hero { padding-top: 116px; } }
 
 .eyebrow {
   display: inline-flex; align-items: center; gap: 9px; margin-bottom: 28px;
-  font-size: 13px; font-weight: 500; letter-spacing: -.005em; color: var(--muted);
+  font-family: var(--mono); font-size: 13px; font-weight: 500; letter-spacing: -.005em; color: var(--muted);
   padding: 6px 15px; border-radius: 999px;
   background: var(--glass-2); border: 1px solid var(--border);
   box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
@@ -189,22 +241,39 @@ header.nav {
 }
 .btn.ghost:hover { text-decoration: none; transform: translateY(-2px); box-shadow: var(--sh-2), inset 0 1px 0 var(--edge); }
 
-.stats { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; margin-top: 52px; }
-.stat b { display: block; font-size: 27px; font-weight: 600; color: var(--ink); letter-spacing: -.03em; }
-.stat span { font-size: 13px; color: var(--faint); font-weight: 450; }
+.stats.glass {
+  display: inline-flex; align-items: center; gap: 26px; flex-wrap: wrap; justify-content: center;
+  margin-top: 52px; padding: 16px 32px; border-radius: 999px;
+}
+.stat b { display: block; font-family: var(--display); font-size: 27px; font-weight: 600; color: var(--ink); letter-spacing: -.03em; }
+.stat span { display: block; font-family: var(--mono); font-size: 12px; color: var(--faint); font-weight: 450; }
+.stat-sep { color: var(--border-2); font-size: 14px; }
+@media (max-width: 560px) { .stats.glass { gap: 18px; padding: 14px 20px; } }
 
-/* ── Terminal — the one dark object on the page ──────────────────────── */
-.term-shell { margin: 62px 0 0; position: relative; }
+/* ── Terminal — the one dark object on the page, lifted off it ─────────── */
+.term-shell { margin: 68px 0 0; position: relative; perspective: 1600px; }
 .term-shell::after {
   content: ""; position: absolute; inset: 22px 22px -30px; z-index: -1;
   background: radial-gradient(60% 60% at 50% 100%, rgba(255,122,47,.34), transparent 72%);
   filter: blur(44px);
 }
+
+/* faint orbit rings + drifting embers around the terminal — the ambient
+   "it's floating" cue that isn't tied to scroll, just always quietly alive */
+.orbit-ring { position: absolute; left: 50%; top: -6%; width: min(760px, 128%); transform: translateX(-50%); opacity: .55; pointer-events: none; animation: spin 70s linear infinite; }
+@keyframes spin { to { transform: translateX(-50%) rotate(360deg); } }
+.spark { position: absolute; border-radius: 50%; background: var(--fire); pointer-events: none; box-shadow: 0 0 14px 3px rgba(255,122,47,.5); animation: floaty 5.5s ease-in-out infinite; }
+.spark.s1 { width: 6px; height: 6px; top: 4%;  left: 6%;  animation-delay: 0s; }
+.spark.s2 { width: 5px; height: 5px; top: 82%; left: 93%; animation-delay: 1.5s; }
+.spark.s3 { width: 4px; height: 4px; top: 90%; left: 4%;  animation-delay: 2.9s; }
+@keyframes floaty { 0%,100% { transform: translateY(0); opacity: .8; } 50% { transform: translateY(-16px); opacity: 1; } }
+
 .term {
   border-radius: 16px; overflow: hidden; text-align: left;
   background: var(--t-bg);
   border: 1px solid rgba(19,19,24,.10);
   box-shadow: var(--sh-3), 0 0 0 1px rgba(255,255,255,.5);
+  will-change: transform; transform-style: preserve-3d;
 }
 /* macOS-style light window chrome over dark content */
 .term-bar {
@@ -217,7 +286,7 @@ header.nav {
 .term-bar .r { background: #FF5F57; } .term-bar .y { background: #FEBC2E; } .term-bar .g { background: #28C840; }
 .term-bar .title { margin-left: 10px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
 .term-bar .replay {
-  margin-left: auto; font-size: 11.5px; font-weight: 500; color: var(--muted);
+  margin-left: auto; font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: var(--muted);
   background: var(--glass-3); border: 1px solid var(--border); border-radius: 999px;
   padding: 3px 12px; cursor: pointer;
   transition: color .18s, box-shadow .18s, transform .18s;
@@ -289,8 +358,8 @@ header.nav {
 section { padding: 96px 0; position: relative; z-index: 1; }
 .sec-head { max-width: 660px; margin: 0 auto 48px; text-align: center; }
 .sec-head .tag {
-  display: inline-block; margin-bottom: 14px;
-  font-size: 13px; font-weight: 600; letter-spacing: -.005em; color: var(--accent);
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 14px;
+  font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: -.005em; color: var(--accent);
 }
 .sec-head p { color: var(--muted); margin-top: 16px; font-size: 17.5px; }
 
@@ -314,9 +383,11 @@ section { padding: 96px 0; position: relative; z-index: 1; }
 .card:hover { transform: translateY(-4px); background: var(--glass-2); box-shadow: var(--sh-2), inset 0 1px 0 var(--edge); }
 .card .ico {
   display: grid; place-items: center; width: 38px; height: 38px; margin-bottom: 16px;
-  font-family: var(--mono); font-size: 16px; color: #fff; border-radius: 11px;
+  color: #fff; border-radius: 11px;
   background: var(--fire); box-shadow: 0 4px 12px -4px rgba(220,78,13,.6);
+  transition: transform .35s var(--ease);
 }
+.card:hover .ico { transform: scale(1.08) rotate(-4deg); }
 .card p { color: var(--muted); font-size: 15px; margin-top: 10px; }
 .card code { color: var(--accent); font-size: 13.5px; }
 
@@ -326,7 +397,7 @@ section { padding: 96px 0; position: relative; z-index: 1; }
 .step .num {
   counter-increment: s; position: relative;
   width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
-  font-size: 13px; font-weight: 600; color: var(--ink);
+  font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink);
   background: var(--glass-3); border: 1px solid var(--border);
   box-shadow: var(--sh-1), inset 0 1px 0 #fff;
 }
@@ -341,14 +412,14 @@ section { padding: 96px 0; position: relative; z-index: 1; }
 
 /* ── Code block ──────────────────────────────────────────────────────── */
 .code { position: relative; border-radius: 16px; overflow: hidden; }
-.code pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.72; color: var(--ink); letter-spacing: -.01em; }
+.code pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.72; color: var(--ink); letter-spacing: -.005em; }
 .code .cm { color: var(--faint); }
 .code .kw { color: var(--accent); }
 .code .st { color: var(--jade); }
 .code .fn { color: var(--sky); }
 .copy {
   position: absolute; top: 10px; right: 10px;
-  font-size: 11.5px; font-weight: 500; color: var(--muted);
+  font-family: var(--mono); font-size: 11.5px; font-weight: 500; color: var(--muted);
   background: var(--glass-3); border: 1px solid var(--border); border-radius: 999px;
   padding: 3px 11px; cursor: pointer; opacity: 0;
   box-shadow: var(--sh-1);
@@ -363,16 +434,19 @@ section { padding: 96px 0; position: relative; z-index: 1; }
 .flow-track { display: flex; align-items: stretch; min-width: 740px; }
 .node { flex: 1; text-align: center; padding: 0 10px; position: relative; }
 .node .box {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
   border-radius: 12px; padding: 14px 8px;
   font-family: var(--mono); font-size: 12.5px; color: var(--body);
   background: var(--glass-2); border: 1px solid var(--border);
   box-shadow: var(--sh-1), inset 0 1px 0 var(--edge);
   transition: color .45s var(--ease), background .45s var(--ease), box-shadow .45s var(--ease), transform .45s var(--ease);
 }
+.node .box svg { flex: 0 0 auto; opacity: .85; }
 .node.on .box {
   color: #fff; background: var(--fire); border-color: transparent; transform: translateY(-3px);
   box-shadow: 0 4px 10px rgba(220,78,13,.22), 0 16px 34px -12px rgba(220,78,13,.7);
 }
+.node.on .box svg { opacity: 1; }
 .node small { display: block; margin-top: 11px; font-size: 12.5px; color: var(--faint); line-height: 1.45; }
 .node::after { content: ""; position: absolute; top: 24px; right: -3px; width: 6px; height: 6px; border-top: 1.5px solid var(--border-2); border-right: 1.5px solid var(--border-2); transform: rotate(45deg); }
 .node:last-child::after { display: none; }
@@ -397,7 +471,7 @@ section { padding: 96px 0; position: relative; z-index: 1; }
 .tbl-wrap { overflow: hidden; }
 table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
 th, td { text-align: left; padding: 14px 20px; border-bottom: 1px solid var(--border); }
-th { color: var(--faint); font-weight: 500; font-size: 12.5px; letter-spacing: .02em; }
+th { color: var(--faint); font-weight: 500; font-size: 12px; letter-spacing: .04em; font-family: var(--mono); text-transform: uppercase; }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: rgba(255,255,255,.42); }
 td code { color: var(--accent); font-size: 13.5px; }
@@ -413,7 +487,7 @@ td .d { color: var(--muted); }
 
 /* ── Note ────────────────────────────────────────────────────────────── */
 .note { padding: 20px 24px; border-left: 3px solid var(--accent-lt); border-radius: 6px 20px 20px 6px; }
-.note b { color: var(--ink); }
+.note b { color: var(--ink); font-family: var(--display); }
 .note p { color: var(--muted); font-size: 15px; margin-top: 6px; }
 .note code { color: var(--accent); font-size: 13.5px; }
 
@@ -422,9 +496,10 @@ footer { border-top: 1px solid var(--border); padding: 48px 0; color: var(--fain
 .foot-in { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
 .foot-in .sp { margin-left: auto; }
 footer a { color: var(--muted); }
+footer .brand { color: var(--faint); }
 
 /* ── Reveal ──────────────────────────────────────────────────────────── */
-.rv { opacity: 0; transform: translateY(18px); transition: opacity .8s var(--ease), transform .8s var(--ease); }
+.rv { opacity: 0; transform: translateY(22px) scale(.985); transition: opacity .8s var(--ease), transform .8s var(--ease); }
 .rv.in { opacity: 1; transform: none; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -436,15 +511,35 @@ footer a { color: var(--muted); }
 </head>
 <body>
 
-<header class="nav">
-  <div class="wrap nav-in">
-    <a class="brand" href="#top"><span class="mark">◈</span> NightCode</a>
+<!-- shared gradient defs, referenced by every fire-colored SVG on the page -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="fireGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  style="stop-color:var(--rose)"></stop>
+      <stop offset="55%" style="stop-color:var(--accent-lt)"></stop>
+      <stop offset="100%" style="stop-color:#FFB43C"></stop>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div class="noise" aria-hidden="true"></div>
+<div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
+
+<header class="nav" id="siteNav">
+  <div class="nav-in">
+    <a class="brand" href="#top">
+      <svg class="mark-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="5" y="5" width="14" height="14" rx="4" transform="rotate(45 12 12)" stroke="url(#fireGrad)" stroke-width="2"></rect>
+        <circle cx="12" cy="12" r="2.4" fill="url(#fireGrad)"></circle>
+      </svg>
+      NightCode
+    </a>
     <nav class="nav-links">
-      <a href="#start">Quick start</a>
-      <a href="#how">How it works</a>
-      <a href="#usage">Usage</a>
-      <a href="#providers">Providers</a>
-      <a href="#config">Config</a>
+      <a href="#start" data-nav>Quick start</a>
+      <a href="#how" data-nav>How it works</a>
+      <a href="#usage" data-nav>Usage</a>
+      <a href="#providers" data-nav>Providers</a>
+      <a href="#config" data-nav>Config</a>
       <a class="ghbtn" href="https://github.com/Nirvanjha2004/nightCode" target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
   </div>
@@ -467,16 +562,27 @@ footer a { color: var(--muted); }
     <a class="btn ghost" href="https://github.com/Nirvanjha2004/nightCode" target="_blank" rel="noopener">View source</a>
   </div>
 
-  <div class="stats">
-    <div class="stat"><b>25+</b><span>providers</span></div>
-    <div class="stat"><b>15</b><span>built-in tools</span></div>
-    <div class="stat"><b>3</b><span>memory kinds</span></div>
-    <div class="stat"><b>14</b><span>self-checks</span></div>
+  <div class="stats glass">
+    <div class="stat"><b data-count="25" data-suffix="+">0</b><span>providers</span></div>
+    <span class="stat-sep">·</span>
+    <div class="stat"><b data-count="15">0</b><span>built-in tools</span></div>
+    <span class="stat-sep">·</span>
+    <div class="stat"><b data-count="3">0</b><span>memory kinds</span></div>
+    <span class="stat-sep">·</span>
+    <div class="stat"><b data-count="14">0</b><span>self-checks</span></div>
   </div>
 
-  <!-- ── live replay of a real session ── -->
+  <!-- ── live replay of a real session, floating in orbit ── -->
   <div class="term-shell">
-    <div class="term">
+    <svg class="orbit-ring" viewBox="0 0 600 460" aria-hidden="true" focusable="false">
+      <ellipse cx="300" cy="230" rx="290" ry="120" fill="none" stroke="var(--border-2)" stroke-width="1" stroke-dasharray="1 9" transform="rotate(-7 300 230)"></ellipse>
+      <ellipse cx="300" cy="230" rx="220" ry="215" fill="none" stroke="var(--border-2)" stroke-width="1" stroke-dasharray="1 9" transform="rotate(11 300 230)"></ellipse>
+    </svg>
+    <span class="spark s1" aria-hidden="true"></span>
+    <span class="spark s2" aria-hidden="true"></span>
+    <span class="spark s3" aria-hidden="true"></span>
+
+    <div class="term" id="termCard">
       <div class="term-bar">
         <i class="r"></i><i class="y"></i><i class="g"></i>
         <span class="title">bun run dev:cli</span>
@@ -509,39 +615,71 @@ footer a { color: var(--muted); }
 <section id="features">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="tag">What you get</span>
+      <span class="tag">
+        <svg class="br-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4L2 12l6 8"></path><path d="M16 4l6 8-6 8"></path></svg>
+        What you get
+      </span>
       <h2>A full ReAct agent,<br>not a chat box</h2>
       <p>Every turn is context → model → tools → result, looped up to ten times until there is a real answer. You watch the whole thing happen.</p>
     </div>
 
     <div class="grid g3">
       <div class="card glass rv">
-        <span class="ico">⏺</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 7l4 5-4 5"></path><path d="M12 17h6"></path>
+          </svg>
+        </span>
         <h3>Real tool use</h3>
         <p>15 tools built in. The model sees a lean 9: <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>, <code>grep</code>, <code>find</code>, <code>ls</code>, <code>todoWrite</code>, <code>spawn_subagent</code> — a small surface keeps the context clean.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">⚠</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3.5l6.5 2.6v5.4c0 4.6-2.8 7.6-6.5 8.9-3.7-1.3-6.5-4.3-6.5-8.9V6.1L12 3.5z"></path>
+            <path d="M8.8 12.3l2.2 2.2 4.2-4.5"></path>
+          </svg>
+        </span>
         <h3>Asks before it breaks things</h3>
         <p>Destructive tools — <code>write</code>, <code>delete</code>, <code>rename</code>, risky <code>bash</code> — pause on a confirmation dialog. Nothing runs until you press <span class="kbd">y</span>.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">✻</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 9v6"></path><path d="M12 5v14"></path><path d="M18 8v8"></path>
+          </svg>
+        </span>
         <h3>Streams as it thinks</h3>
         <p>Answers type out live as the model generates them, and reasoning streams into a dimmed panel beside the work — no staring at a spinner wondering if it hung.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">◈</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <ellipse cx="12" cy="6" rx="6.2" ry="2.3"></ellipse>
+            <path d="M5.8 6v5.5c0 1.3 2.8 2.3 6.2 2.3s6.2-1 6.2-2.3V6"></path>
+            <path d="M5.8 11.5V17c0 1.3 2.8 2.3 6.2 2.3s6.2-1 6.2-2.3v-5.5"></path>
+          </svg>
+        </span>
         <h3>Remembers across sessions</h3>
         <p>Durable facts, learned rules, and notable events are extracted after each turn and injected into the next session's prompt. Stored in your repo, never in a cloud.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">✗</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4.5" y="4.5" width="15" height="15" rx="4"></rect>
+            <path d="M9.3 9.3l5.4 5.4"></path><path d="M14.7 9.3l-5.4 5.4"></path>
+          </svg>
+        </span>
         <h3>Stops when you say stop</h3>
         <p><span class="kbd">Esc</span> ends a run between steps, keeps the history valid, and kills the child process tree. The session stays usable for the next prompt.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">⎇</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><circle cx="18" cy="12" r="2"></circle>
+            <path d="M6 8v8"></path><path d="M6 12h5.5a3.5 3.5 0 0 0 3.5-3.5"></path>
+          </svg>
+        </span>
         <h3>Delegates to subagents</h3>
         <p><code>spawn_subagent</code> hands a scoped sub-task to a fresh session with restricted tools and no memory writes — so a side quest can't pollute the main thread.</p>
       </div>
@@ -553,7 +691,10 @@ footer a { color: var(--muted); }
 <section id="start">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="tag">Quick start</span>
+      <span class="tag">
+        <svg class="br-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4L2 12l6 8"></path><path d="M16 4l6 8-6 8"></path></svg>
+        Quick start
+      </span>
       <h2>Running in three commands</h2>
       <p>NightCode runs on <a href="https://bun.sh" target="_blank" rel="noopener">Bun</a>. Bring your own key for any provider you like — the default is Groq.</p>
     </div>
@@ -619,19 +760,58 @@ NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
 <section id="how">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="tag">How it works</span>
+      <span class="tag">
+        <svg class="br-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4L2 12l6 8"></path><path d="M16 4l6 8-6 8"></path></svg>
+        How it works
+      </span>
       <h2>What happens when<br>you hit enter</h2>
       <p>One turn, start to finish. Every stage emits an event, and every event is something you can see on screen.</p>
     </div>
 
     <div class="flow glass rv">
       <div class="flow-track" id="flow">
-        <div class="node"><div class="box">input</div><small>slash command resolved, raw text stored</small></div>
-        <div class="node"><div class="box">memory</div><small>facts, rules and past events built into the prompt</small></div>
-        <div class="node"><div class="box">context</div><small>~700-token prompt + a 9-tool surface</small></div>
-        <div class="node"><div class="box">model</div><small>streamed — text and reasoning arrive as deltas</small></div>
-        <div class="node"><div class="box">tools</div><small>run, with a confirmation gate on destructive ones</small></div>
-        <div class="node"><div class="box">answer</div><small>final text stored, memory extracted in the background</small></div>
+        <div class="node">
+          <div class="box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h11"></path><path d="M11 7.5l4.5 4.5-4.5 4.5"></path></svg>
+            <span>input</span>
+          </div>
+          <small>slash command resolved, raw text stored</small>
+        </div>
+        <div class="node">
+          <div class="box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7.5 4.3v9.4L12 21l-7.5-4.3V7.3L12 3z"></path><path d="M12 3v18"></path></svg>
+            <span>memory</span>
+          </div>
+          <small>facts, rules and past events built into the prompt</small>
+        </div>
+        <div class="node">
+          <div class="box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7.5h16"></path><path d="M4 12h16"></path><path d="M4 16.5h10"></path></svg>
+            <span>context</span>
+          </div>
+          <small>~700-token prompt + a 9-tool surface</small>
+        </div>
+        <div class="node">
+          <div class="box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"></rect><path d="M12 2.5v3.2"></path><path d="M12 18.3v3.2"></path><path d="M2.5 12h3.2"></path><path d="M18.3 12h3.2"></path></svg>
+            <span>model</span>
+          </div>
+          <small>streamed — text and reasoning arrive as deltas</small>
+        </div>
+        <div class="node">
+          <div class="box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3"></path><path d="M12 18v3"></path><path d="M4.9 7.5l2.6 1.5"></path><path d="M16.5 15l2.6 1.5"></path><path d="M4.9 16.5l2.6-1.5"></path><path d="M16.5 9l2.6-1.5"></path></svg>
+            <span>tools</span>
+          </div>
+          <small>run, with a confirmation gate on destructive ones</small>
+        </div>
+        <div class="node">
+          <div class="box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>
+            <span>answer</span>
+          </div>
+          <small>final text stored, memory extracted in the background</small>
+        </div>
       </div>
       <div class="flow-loop">
         <b>↻</b> steps 3–5 loop up to 10 times per turn, until the model stops calling tools
@@ -640,17 +820,23 @@ NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
 
     <div class="grid g3" style="margin-top: 20px;">
       <div class="card glass rv">
-        <span class="ico">◷</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></svg>
+        </span>
         <h3>Context stays bounded</h3>
         <p>Around 100k estimated tokens, older messages are summarized by the model itself — chainable across compressions, always keeping the last 15 messages intact.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">↯</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"></path></svg>
+        </span>
         <h3>Failures come back as results</h3>
         <p>A failing shell command returns its stdout, stderr and exit code as a <em>result</em>, not an exception — so the agent can read the error and recover on the next step.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">◎</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"></rect><path d="M8 12h8"></path><path d="M12 8v8"></path></svg>
+        </span>
         <h3>Memory is guarded</h3>
         <p>The <code>memory/</code> tree is off-limits to every agent tool. Read, write, edit, delete and grep are all blocked against it.</p>
       </div>
@@ -662,7 +848,10 @@ NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
 <section id="usage">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="tag">Usage</span>
+      <span class="tag">
+        <svg class="br-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4L2 12l6 8"></path><path d="M16 4l6 8-6 8"></path></svg>
+        Usage
+      </span>
       <h2>Driving the thing</h2>
       <p>Everything is one keystroke away. There is no mouse mode and no menus you have to hunt for.</p>
     </div>
@@ -696,7 +885,7 @@ NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
 
     <div class="rv" style="margin-top:42px;">
       <div class="sec-head" style="margin-bottom:24px;">
-        <h3 style="font-size:22px; letter-spacing:-.025em;">Files it creates</h3>
+        <h3 style="font-size:22px; letter-spacing:-.02em; font-family:var(--display);">Files it creates</h3>
         <p style="font-size:15.5px; margin-top:10px;">All gitignored, created on first run, and always anchored to the repo root — never to whatever directory you launched from.</p>
       </div>
       <div class="tbl-wrap glass">
@@ -719,7 +908,10 @@ NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
 <section id="providers">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="tag">Providers</span>
+      <span class="tag">
+        <svg class="br-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4L2 12l6 8"></path><path d="M16 4l6 8-6 8"></path></svg>
+        Providers
+      </span>
       <h2>Bring your own model</h2>
       <p>One internal interface, per-provider adapters. Hosted or local, frontier or cheap — switch at boot with an env var, or mid-session with <span class="kbd">Ctrl</span> <span class="kbd">M</span>.</p>
     </div>
@@ -741,17 +933,23 @@ NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
 
     <div class="grid g3" style="margin-top:34px;">
       <div class="card glass rv">
-        <span class="ico">◍</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="3"></rect><path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6"></path></svg>
+        </span>
         <h3>One transport, many providers</h3>
         <p>Every OpenAI-compatible provider shares a single transport configured with a base URL, key and catalog. Anthropic, Gemini, Azure, Vertex and Bedrock get dedicated adapters.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">⌁</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h5l2-6 4 12 2-6h3"></path></svg>
+        </span>
         <h3>Normalized everything</h3>
         <p>Streams, errors and usage are normalized before the loop sees them, so the agent never learns a provider's quirks.</p>
       </div>
       <div class="card glass rv">
-        <span class="ico">✦</span>
+        <span class="ico">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4.5"></path><path d="M12 16.5V21"></path><path d="M4.5 12H3"></path><path d="M21 12h-1.5"></path><circle cx="12" cy="12" r="4.2"></circle></svg>
+        </span>
         <h3>New provider, no code</h3>
         <p>Add a <code>providers</code> entry to <code>nightcode.config.json</code> and it registers at boot. Source changes are only needed for a genuinely new wire format.</p>
       </div>
@@ -763,14 +961,17 @@ NIGHTCODE_MODEL=<span class="st">claude-sonnet-4-5</span></pre>
 <section id="config">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="tag">Configuration</span>
+      <span class="tag">
+        <svg class="br-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4L2 12l6 8"></path><path d="M16 4l6 8-6 8"></path></svg>
+        Configuration
+      </span>
       <h2>Two files, both optional</h2>
       <p>Environment variables win over the config file, which wins over the built-in defaults.</p>
     </div>
 
     <div class="grid g2">
       <div class="rv">
-        <h3 style="margin-bottom:12px;"><code style="color:var(--accent)">.env</code> — keys and selection</h3>
+        <h3 style="margin-bottom:12px; font-family:var(--display);"><code style="color:var(--accent); font-family:var(--mono);">.env</code> — keys and selection</h3>
         <div class="code glass">
           <button class="copy" type="button">copy</button>
 <pre><span class="cm"># provider + model (optional)</span>
@@ -790,7 +991,7 @@ OLLAMA_BASE_URL=http://localhost:11434/v1</pre>
       </div>
 
       <div class="rv">
-        <h3 style="margin-bottom:12px;"><code style="color:var(--accent)">nightcode.config.json</code> — the rest</h3>
+        <h3 style="margin-bottom:12px; font-family:var(--display);"><code style="color:var(--accent); font-family:var(--mono);">nightcode.config.json</code> — the rest</h3>
         <div class="code glass">
           <button class="copy" type="button">copy</button>
 <pre>{
@@ -820,17 +1021,22 @@ OLLAMA_BASE_URL=http://localhost:11434/v1</pre>
 </section>
 
 <!-- ══ STATUS ════════════════════════════════════════════════════════ -->
-<section id="status">
+<section id="roadmap">
   <div class="wrap">
     <div class="sec-head rv">
-      <span class="tag">Status</span>
+      <span class="tag">
+        <svg class="br-ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4L2 12l6 8"></path><path d="M16 4l6 8-6 8"></path></svg>
+        Status
+      </span>
       <h2>What it doesn't do yet</h2>
       <p>NightCode is a personal project, and the README keeps an honest scorecard against <a href="https://github.com/earendil-works/pi" target="_blank" rel="noopener">Pi</a>. The short version:</p>
     </div>
 
     <div class="grid g2">
       <div class="card glass rv">
-        <span class="ico" style="background:linear-gradient(140deg,#12B886,#0E9F6E); box-shadow:0 4px 12px -4px rgba(14,159,110,.6)">✓</span>
+        <span class="ico" style="background:linear-gradient(140deg,#12B886,#0E9F6E); box-shadow:0 4px 12px -4px rgba(14,159,110,.6)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9"></path></svg>
+        </span>
         <h3>Solid today</h3>
         <p>
           Provider-neutral LLM layer across 25+ providers · live streaming of answers and reasoning ·
@@ -839,7 +1045,9 @@ OLLAMA_BASE_URL=http://localhost:11434/v1</pre>
         </p>
       </div>
       <div class="card glass rv">
-        <span class="ico" style="background:linear-gradient(140deg,#FFC048,#E8940F); box-shadow:0 4px 12px -4px rgba(232,148,15,.6)">◔</span>
+        <span class="ico" style="background:linear-gradient(140deg,#FFC048,#E8940F); box-shadow:0 4px 12px -4px rgba(232,148,15,.6)">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3a9 9 0 0 1 6.4 15.4"></path></svg>
+        </span>
         <h3>Not there yet</h3>
         <p>
           Sessions live in memory and are lost on exit · no session tree or branching ·
@@ -853,7 +1061,13 @@ OLLAMA_BASE_URL=http://localhost:11434/v1</pre>
 
 <footer>
   <div class="wrap foot-in">
-    <span class="brand"><span class="mark">◈</span> NightCode</span>
+    <span class="brand">
+      <svg class="mark-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="5" y="5" width="14" height="14" rx="4" transform="rotate(45 12 12)" stroke="url(#fireGrad)" stroke-width="2"></rect>
+        <circle cx="12" cy="12" r="2.4" fill="url(#fireGrad)"></circle>
+      </svg>
+      NightCode
+    </span>
     <span>Built with Bun. Terminal UI by <a href="https://github.com/anomalyco/opentui" target="_blank" rel="noopener">@opentui</a>.</span>
     <span class="sp"></span>
     <a href="https://github.com/Nirvanjha2004/nightCode" target="_blank" rel="noopener">GitHub ↗</a>
@@ -1140,6 +1354,103 @@ OLLAMA_BASE_URL=http://localhost:11434/v1</pre>
       if (entries[0].isIntersecting && !started) { started = true; play(); }
     }, { threshold: .25 }).observe(screen);
     replay.addEventListener("click", () => play());
+  }
+})();
+</script>
+
+<script>
+/* ═══ chrome: floating nav, scroll progress, scrollspy, stat count-up,
+   terminal float + tilt — all additive, none of it touches the replay above ═══ */
+(() => {
+  "use strict";
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ── floating nav shrink + top progress bar, one scroll listener ────── */
+  const nav = document.getElementById("siteNav");
+  const bar = document.getElementById("scrollProgress");
+  let ticking = false;
+  function onScroll() {
+    const doc = document.documentElement;
+    const top = doc.scrollTop || document.body.scrollTop;
+    nav.classList.toggle("scrolled", top > 12);
+    const height = doc.scrollHeight - doc.clientHeight;
+    bar.style.width = (height > 0 ? Math.min(100, (top / height) * 100) : 0) + "%";
+    ticking = false;
+  }
+  document.addEventListener("scroll", () => {
+    if (!ticking) { requestAnimationFrame(onScroll); ticking = true; }
+  }, { passive: true });
+  onScroll();
+
+  /* ── scrollspy: highlight the nav link for the section in view ──────── */
+  const navLinks = [...document.querySelectorAll(".nav-links a[data-nav]")];
+  const tracked = navLinks
+    .map((a) => ({ a, el: document.querySelector(a.getAttribute("href")) }))
+    .filter((x) => x.el);
+  if (tracked.length) {
+    const spy = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const hit = tracked.find((x) => x.el === entry.target);
+        if (!hit) return;
+        navLinks.forEach((l) => l.classList.remove("active"));
+        hit.a.classList.add("active");
+      });
+    }, { rootMargin: "-42% 0px -50% 0px", threshold: 0 });
+    tracked.forEach((x) => spy.observe(x.el));
+  }
+
+  /* ── stat count-up, once each number scrolls into view ───────────────── */
+  const statNums = document.querySelectorAll(".stat b[data-count]");
+  function animateCount(el) {
+    const target = parseInt(el.dataset.count, 10) || 0;
+    const suffix = el.dataset.suffix || "";
+    if (reduced) { el.textContent = target + suffix; return; }
+    const dur = 1000;
+    const t0 = performance.now();
+    function tick(now) {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * eased) + suffix;
+      if (p < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+  if (statNums.length) {
+    const statObs = new IntersectionObserver((entries) => {
+      entries.forEach((e) => {
+        if (e.isIntersecting) { animateCount(e.target); statObs.unobserve(e.target); }
+      });
+    }, { threshold: .6 });
+    statNums.forEach((el) => statObs.observe(el));
+  }
+
+  /* ── terminal: ambient float + a gentle cursor-following tilt ───────── */
+  const shell = document.querySelector(".term-shell");
+  const term = document.getElementById("termCard");
+  if (shell && term) {
+    if (reduced) {
+      term.style.transform = "none";
+    } else {
+      let curX = 0, curY = 0, targetX = 0, targetY = 0;
+      const t0 = performance.now();
+      shell.addEventListener("mousemove", (e) => {
+        const r = shell.getBoundingClientRect();
+        const px = (e.clientX - r.left) / r.width - 0.5;
+        const py = (e.clientY - r.top) / r.height - 0.5;
+        targetX = py * -5.5;
+        targetY = px * 7.5;
+      });
+      shell.addEventListener("mouseleave", () => { targetX = 0; targetY = 0; });
+      function loop(now) {
+        curX += (targetX - curX) * 0.07;
+        curY += (targetY - curY) * 0.07;
+        const bob = Math.sin((now - t0) / 1700) * 7;
+        term.style.transform = `translateY(${bob}px) rotateX(${curX}deg) rotateY(${curY}deg)`;
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+    }
   }
 })();
 </script>

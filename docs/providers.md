@@ -45,7 +45,7 @@ bun run dev:cli
 ```
 
 Without any explicit choice, NightCode keeps its historical behavior: it
-defaults to **Groq** (`llama-3.3-70b-versatile`). If no key is set for the default,
+defaults to **Groq** (`qwen/qwen3.6-27b`). If no key is set for the default,
 it auto-selects the first provider (in priority order) that *does* have a key,
 and if none do, it stops with a boot message explaining exactly what to set.
 Keys are **never** hardcoded and **never** logged.
@@ -138,7 +138,7 @@ Precedence (high → low):
 1. **CLI/env override** — `NIGHTCODE_PROVIDER`, `NIGHTCODE_MODEL`
 2. **Config file** — `nightcode.config.json` (`provider`, `model`, `reasoning`)
 3. **Auto-selection** — the first provider with credentials present (priority: Groq → OpenAI → Anthropic → Gemini → DeepSeek → Mistral → xAI → Together → Fireworks → OpenRouter → Cerebras → NVIDIA)
-4. **Static defaults** — Groq + `llama-3.3-70b-versatile` (what NightCode shipped with)
+4. **Static defaults** — Groq + `qwen/qwen3.6-27b` (what NightCode shipped with)
 
 Per-provider credentials resolve as: **config-file `apiKey` → `apiKeyEnv` env var(s) → `apiKeyEnv` defaults from the preset**. Local providers need no key.
 

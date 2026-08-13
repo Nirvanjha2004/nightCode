@@ -43,7 +43,7 @@ async function main() {
             subagentModel: () => "stub-model",
         };
         const builder = new ContextBuilder(messageManager, sessionManager, toolRegistry, llm);
-        const sessionId = sessionManager.create({ model: "llama-3.3-70b-versatile" });
+        const sessionId = sessionManager.create({ model: "qwen/qwen3.6-27b" });
         messageManager.add({ messageId: "m1", sessionId, role: "user", content: "hello", createdAt: new Date() });
 
         const ctx = await builder.build(sessionId, "## Known facts\n- x");
